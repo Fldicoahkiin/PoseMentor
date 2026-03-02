@@ -300,7 +300,7 @@ def _job_option_list(jobs: list[dict[str, Any]]) -> list[str]:
 
 
 def build_app(default_api: str) -> gr.Blocks:
-    with gr.Blocks(title="PoseMentor 管理后台", theme=gr.themes.Base(), css=CUSTOM_CSS) as app:
+    with gr.Blocks(title="PoseMentor 管理后台") as app:
         gr.HTML(
             """
 <div id="hero-panel">
@@ -554,7 +554,25 @@ def build_app(default_api: str) -> gr.Blocks:
 def main() -> None:
     args = parse_args()
     app = build_app(default_api=args.api)
-    app.launch(server_name=args.host, server_port=args.port, share=args.share)
+    try:
+        app.launch(
+            server_name=args.host,
+            server_port=args.port,
+            share=args.share,
+            theme=gr.themes.Base(),
+            css=CUSTOM_CSS,
+        )
+    except OSError as exc:
+        if "Cannot find empty port" not in str(exc):
+            raise
+        print(f"[WARN] 端口 {args.port} 不可用，自动切换到随机可用端口")
+        app.launch(
+            server_name=args.host,
+            server_port=None,
+            share=args.share,
+            theme=gr.themes.Base(),
+            css=CUSTOM_CSS,
+        )
 
 
 if __name__ == "__main__":

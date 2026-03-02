@@ -36,6 +36,7 @@ function Start-OneService {
 
 function Start-Services {
     Ensure-Dirs
+    Stop-Services
     Start-OneService -Name "backend_api" -ScriptFile "backend_api.py"
     Start-OneService -Name "admin_console" -ScriptFile "admin_console.py"
     Start-OneService -Name "app_demo" -ScriptFile "app_demo.py"

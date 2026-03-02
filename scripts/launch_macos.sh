@@ -15,6 +15,7 @@ ensure_dirs() {
 
 start_services() {
   ensure_dirs
+  stop_services
   cd "$PROJECT_ROOT"
   export UV_CACHE_DIR="$PROJECT_ROOT/.uv_cache"
 

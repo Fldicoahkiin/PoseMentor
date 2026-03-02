@@ -12,6 +12,56 @@ import numpy as np
 from posementor.pipeline.realtime_coach import CoachConfig, RealtimeDanceCoach
 from posementor.utils.io import ensure_dir
 
+CUSTOM_CSS = """
+:root {
+  --bg-0: #f7f1e7;
+  --bg-1: #efe3d1;
+  --card: #fffaf1;
+  --line: #e7d8bf;
+  --text: #2e2a24;
+  --muted: #6b6358;
+  --accent: #c96e16;
+  --accent-2: #8f3f15;
+}
+
+.gradio-container {
+  background: radial-gradient(circle at top right, #fff8ed 0%, var(--bg-0) 45%, var(--bg-1) 100%);
+  color: var(--text);
+  font-family: "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+}
+
+#app-hero {
+  background: linear-gradient(120deg, #fff2df 0%, #ffe8cc 54%, #fbdabc 100%);
+  border: 1px solid #eecba2;
+  border-radius: 16px;
+  padding: 16px 20px;
+  box-shadow: 0 10px 28px rgba(132, 84, 24, 0.12);
+  margin-bottom: 10px;
+}
+
+#app-hero h1 {
+  margin: 0;
+  font-size: 24px;
+  color: #201a14;
+}
+
+#app-hero p {
+  margin: 6px 0 0;
+  color: #4e463d;
+}
+
+button.primary,
+button.lg.primary {
+  background: linear-gradient(110deg, var(--accent) 0%, var(--accent-2) 100%) !important;
+  border: none !important;
+  color: #fff !important;
+}
+
+.block {
+  border-radius: 12px !important;
+}
+"""
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="PoseMentor AIST++ 快速 Demo")
@@ -26,11 +76,13 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def build_app(coach: RealtimeDanceCoach) -> gr.Blocks:
-    styles = coach.available_styles() or ["gBR"]
+def build_app(coach: RealtimeDanceCoach | None, init_error: str | None) -> gr.Blocks:
+    styles = coach.available_styles() if coach is not None else []
+    styles = styles or ["gBR"]
 
     def reset_stream_state() -> tuple[dict, str, None]:
-        coach.reset()
+        if coach is not None:
+            coach.reset()
         return {"frames": 0}, "已重置缓存，请重新开始动作。", None
 
     def process_webcam_frame(
@@ -38,6 +90,17 @@ def build_app(coach: RealtimeDanceCoach) -> gr.Blocks:
         style: str,
         state: dict,
     ) -> tuple[np.ndarray, dict, str, str | None, object, dict]:
+        if coach is None:
+            empty = np.zeros((480, 640, 3), dtype=np.uint8)
+            return (
+                empty,
+                {},
+                f"模型未就绪：{init_error or '请先完成训练'}",
+                None,
+                None,
+                state or {"frames": 0},
+            )
+
         if frame_rgb is None:
             empty = np.zeros((480, 640, 3), dtype=np.uint8)
             return empty, {}, "请打开摄像头", None, None, state
@@ -59,6 +122,8 @@ def build_app(coach: RealtimeDanceCoach) -> gr.Blocks:
         return result["annotated"], score_panel, advice, audio, result["plot"], state
 
     def process_video_file(video_path: str, style: str, progress: gr.Progress = gr.Progress()) -> tuple[str, str, object, str | None]:
+        if coach is None:
+            raise gr.Error(f"模型未就绪：{init_error or '请先完成训练'}")
         if not video_path:
             raise gr.Error("请先上传或录制一段视频")
 
@@ -128,13 +193,17 @@ def build_app(coach: RealtimeDanceCoach) -> gr.Blocks:
 
         return str(out_video), summary_md, last_plot, last_audio
 
-    with gr.Blocks(title="PoseMentor Demo", theme=gr.themes.Soft()) as app:
-        gr.Markdown(
+    with gr.Blocks(title="PoseMentor Demo") as app:
+        gr.HTML(
             """
-# PoseMentor：AIST++ 单摄像头实时教学 Demo
-快速路径：YOLO11-Pose -> 3D Lift -> DTW 对齐 -> 打分/错误关节高亮/语音反馈
+<div id="app-hero">
+  <h1>PoseMentor 单摄像头动作教学系统</h1>
+  <p>YOLO11-Pose -> 3D Lift -> DTW 对齐 -> 实时打分 / 关节高亮 / 语音纠错</p>
+</div>
 """
         )
+        if init_error:
+            gr.Markdown(f"⚠️ 模型初始化失败：`{init_error}`")
 
         with gr.Tab("实时摄像头（实时输入）"):
             with gr.Row():
@@ -179,11 +248,10 @@ def build_app(coach: RealtimeDanceCoach) -> gr.Blocks:
         with gr.Tab("视频上传/录制 Demo"):
             video_input = gr.Video(
                 sources=["upload", "webcam"],
-                type="filepath",
                 label="输入视频",
             )
             style_for_video = gr.Dropdown(choices=styles, value=styles[0], label="舞种模板")
-            run_btn = gr.Button("开始分析")
+            run_btn = gr.Button("开始分析", variant="primary")
 
             video_output = gr.Video(label="输出视频（红绿高亮+打分）")
             summary_output = gr.Markdown()
@@ -202,18 +270,42 @@ def build_app(coach: RealtimeDanceCoach) -> gr.Blocks:
 def main() -> None:
     args = parse_args()
 
-    coach = RealtimeDanceCoach(
-        CoachConfig(
-            yolo_weights=args.yolo_weights,
-            lift_checkpoint=args.lift_ckpt,
-            norm_file=args.norm,
-            template_dir=args.template_dir,
-            tts_engine=args.tts_engine,
+    coach: RealtimeDanceCoach | None = None
+    init_error: str | None = None
+    try:
+        coach = RealtimeDanceCoach(
+            CoachConfig(
+                yolo_weights=args.yolo_weights,
+                lift_checkpoint=args.lift_ckpt,
+                norm_file=args.norm,
+                template_dir=args.template_dir,
+                tts_engine=args.tts_engine,
+            )
         )
-    )
+    except Exception as exc:  # noqa: BLE001
+        init_error = str(exc)
 
-    app = build_app(coach)
-    app.launch(server_name=args.host, server_port=args.port, share=args.share)
+    app = build_app(coach, init_error)
+
+    try:
+        app.launch(
+            server_name=args.host,
+            server_port=args.port,
+            share=args.share,
+            theme=gr.themes.Base(),
+            css=CUSTOM_CSS,
+        )
+    except OSError as exc:
+        if "Cannot find empty port" not in str(exc):
+            raise
+        print(f"[WARN] 端口 {args.port} 不可用，自动切换到随机可用端口")
+        app.launch(
+            server_name=args.host,
+            server_port=None,
+            share=args.share,
+            theme=gr.themes.Base(),
+            css=CUSTOM_CSS,
+        )
 
 
 if __name__ == "__main__":
