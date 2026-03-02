@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import pickle
 import urllib.request
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +30,15 @@ def load_pickle_or_npz(path: Path) -> dict[str, Any]:
     suffix = path.suffix.lower()
     if suffix in {".pkl", ".pickle"}:
         with path.open("rb") as f:
-            obj = pickle.load(f)
+            # AIST++ 部分 pickle 在 NumPy 2.x 下会触发 VisibleDeprecationWarning，
+            # 不影响实际加载结果，这里仅抑制该类噪声告警。
+            with warnings.catch_warnings():
+                visible_warning = getattr(np, "VisibleDeprecationWarning", None)
+                if visible_warning is None:
+                    visible_warning = getattr(getattr(np, "exceptions", object()), "VisibleDeprecationWarning", None)
+                if visible_warning is not None:
+                    warnings.filterwarnings("ignore", category=visible_warning)
+                obj = pickle.load(f)
         if isinstance(obj, dict):
             return obj
         return {"data": obj}

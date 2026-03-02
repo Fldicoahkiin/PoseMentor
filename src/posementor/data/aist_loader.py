@@ -75,12 +75,26 @@ def load_gt3d_file(file_path: Path, default_fps: int = 60) -> AISTSequence:
 
 
 def find_gt3d_files(annotations_root: Path) -> list[Path]:
-    candidates = []
-    for sub in ["keypoints3d", "motions", "annotations", ""]:
-        folder = annotations_root / sub
-        if not folder.exists():
-            continue
-        candidates.extend(folder.glob("*.pkl"))
-        candidates.extend(folder.glob("*.pickle"))
-        candidates.extend(folder.glob("*.npz"))
+    if not annotations_root.exists():
+        return []
+
+    # AIST++ fullset 标准 3D 文件在 keypoints3d 目录，优先精确匹配，避免误扫 motions。
+    keypoints3d_files: list[Path] = []
+    for suffix in ["*.pkl", "*.pickle", "*.npz"]:
+        keypoints3d_files.extend(annotations_root.rglob(f"keypoints3d/{suffix}"))
+    if keypoints3d_files:
+        return sorted(set(keypoints3d_files))
+
+    # 兼容非标准命名目录，尝试仅扫描明显是 3D 标注的目录名。
+    candidates: list[Path] = []
+    for folder_name in ["joints3d", "pose3d", "positions3d"]:
+        for suffix in ["*.pkl", "*.pickle", "*.npz"]:
+            candidates.extend(annotations_root.rglob(f"{folder_name}/{suffix}"))
+    if candidates:
+        return sorted(set(candidates))
+
+    # 最后兜底：若目录结构未知，递归扫描全部标注文件。
+    for suffix in ["*.pkl", "*.pickle", "*.npz"]:
+        candidates.extend(annotations_root.rglob(suffix))
+
     return sorted(set(candidates))
