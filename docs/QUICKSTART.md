@@ -1,25 +1,57 @@
-# 2天快速出Demo执行清单
+# 快速执行清单
 
-## Day 1（数据+模型）
+## 1) 一键启动全栈服务
 
-1. `uv sync` 安装环境。  
-2. 一键下载并解压注释：`uv run python download_and_prepare_aist.py --config configs/data.yaml --download --extract --skip-preprocess`。  
-3. 一键下载少量视频（先 30~80 段）：`uv run python download_and_prepare_aist.py --config configs/data.yaml --download-videos --video-limit 80 --agree-aist-license --skip-preprocess`。  
-4. 运行 `download_and_prepare_aist.py` 产出 `gt3d`。  
-5. 运行 `extract_pose_yolo11.py` 产出 `yolo2d`。  
-6. 跑 `train_3d_lift_demo.py`（先 10~15 epoch 看收敛）。
+### macOS
 
-## Day 2（在线演示）
+```bash
+cd /Users/mac/WorkSpace/Python_Project/posementor
+./scripts/launch_macos.sh all
+```
 
-1. 启动 `app_demo.py`，先跑视频上传路径验证结果。  
-2. 再切换摄像头流式路径，检查实时 FPS。  
-3. 录制 1~2 个关键动作片段，生成输出视频。  
-4. 调整评分阈值和语音文案，确保结果可解释。
+### Windows
 
-## 最小演示配置建议
+```powershell
+cd C:\path\to\posementor
+powershell -ExecutionPolicy Bypass -File .\scripts\launch_windows.ps1 -Action all
+```
 
-- 分辨率：`640x480` 或 `960x540`
-- 模型：`yolo11m-pose.pt`
-- 序列长度：`81`
-- 推理阈值：`det_conf=0.35`
-- 错误关节阈值：`60mm`
+入口地址：
+- 在线系统：`http://127.0.0.1:7860`
+- 管理后台：`http://127.0.0.1:7861`
+- Backend API：`http://127.0.0.1:8787`
+
+## 2) 一键数据准备
+
+```bash
+uv run python download_and_prepare_aist.py --config configs/data.yaml --download --extract
+```
+
+```bash
+uv run python download_and_prepare_aist.py \
+  --config configs/data.yaml \
+  --download-videos \
+  --video-limit 80 \
+  --agree-aist-license \
+  --skip-preprocess
+```
+
+```bash
+uv run python extract_pose_yolo11.py --weights yolo11m-pose.pt --config configs/data.yaml
+```
+
+## 3) 训练 + 导出 + 测试
+
+```bash
+uv run python train_3d_lift_demo.py --config configs/train.yaml --export-onnx
+```
+
+```bash
+uv run python evaluate_model_suite.py --input-dir data/raw/aistpp/videos --style gBR --max-videos 10 --output-csv outputs/eval/summary.csv
+```
+
+## 4) 四机位对齐与格式化（扩展）
+
+```bash
+uv run python prepare_multiview_dataset.py --config configs/multiview.yaml --limit-sessions 20
+```

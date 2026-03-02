@@ -20,5 +20,5 @@ COPY *.py ./
 
 RUN pip install --upgrade pip && pip install uv && uv pip install --system .
 
-EXPOSE 7860
+EXPOSE 7860 7861 8787
 CMD ["python", "app_demo.py", "--host", "0.0.0.0", "--port", "7860"]

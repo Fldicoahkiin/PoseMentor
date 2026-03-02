@@ -191,6 +191,9 @@ class RealtimeDanceCoach:
         return detail, bad_joints, ref_last
 
     def _maybe_tts(self, advice_text: str, score: float) -> Path | None:
+        if self.config.tts_engine == "none":
+            return None
+
         now = time.time()
         if score > 90:
             return None

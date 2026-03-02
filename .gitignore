@@ -1,6 +1,8 @@
 __pycache__/
 *.pyc
 .venv/
+.uv_cache/
+*.egg-info/
 .env
 outputs/
 artifacts/

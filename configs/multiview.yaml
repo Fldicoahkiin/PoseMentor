@@ -1,0 +1,22 @@
+# 四机位数据准备配置（后续扩展训练用）
+
+input_root: data/raw/multiview
+output_root: data/processed/multiview
+
+# 每个 session 下需要包含以下文件，例如：
+# data/raw/multiview/session_001/front.mp4
+camera_files:
+  - front.mp4
+  - left.mp4
+  - right.mp4
+  - back.mp4
+
+alignment:
+  scan_frames: 360
+  motion_ratio: 2.8
+
+format:
+  target_fps: 30.0
+  target_width: 960
+  target_height: 540
+  max_frames: 0

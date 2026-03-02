@@ -26,6 +26,9 @@ def synthesize_speech(
     edge_voice: str = "zh-CN-XiaoxiaoNeural",
 ) -> Path | None:
     """返回语音文件路径，失败时返回 None，不中断推理流程。"""
+    if voice_engine == "none":
+        return None
+
     output_dir.mkdir(parents=True, exist_ok=True)
     out_file = output_dir / f"{int(time.time() * 1000)}_{_sanitize_filename(text)}.mp3"
 
