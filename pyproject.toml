@@ -1,0 +1,66 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "posementor"
+version = "0.1.0"
+description = "AIST++ 单摄像头舞蹈/体育动作教学 Demo"
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+authors = [{ name = "PoseMentor Team" }]
+dependencies = [
+  "numpy>=2.1.0",
+  "scipy>=1.14.0",
+  "pandas>=2.2.0",
+  "pyyaml>=6.0.2",
+  "tqdm>=4.67.0",
+  "opencv-python>=4.11.0.86",
+  "torch>=2.4.0",
+  "lightning>=2.5.0",
+  "einops>=0.8.0",
+  "ultralytics>=8.3.0",
+  "gradio>=5.20.0",
+  "plotly>=6.0.0",
+  "fastdtw>=0.3.4",
+  "onnx>=1.17.0",
+  "edge-tts>=7.0.0",
+  "gTTS>=2.5.4",
+  "soundfile>=0.13.1",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3.0",
+  "ruff>=0.9.10",
+  "mypy>=1.15.0",
+]
+mac = [
+  "onnxruntime>=1.20.0; platform_system == 'Darwin'",
+]
+windows = [
+  "onnxruntime-gpu>=1.20.0; platform_system == 'Windows'",
+  "pywin32>=308; platform_system == 'Windows'",
+]
+linux = [
+  "onnxruntime-gpu>=1.20.0; platform_system == 'Linux'",
+]
+
+[tool.uv]
+package = true
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]

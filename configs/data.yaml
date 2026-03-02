@@ -1,0 +1,22 @@
+# AIST++ 快速路径数据配置
+# 目录结构：
+# data/raw/aistpp/
+#   ├── annotations/
+#   └── videos/*.mp4
+
+aist_root: data/raw/aistpp
+annotations_subdir: annotations
+videos_subdir: videos
+processed_root: data/processed/aistpp
+
+# 官方注释下载链接（Google 公共桶）
+download_urls:
+  - name: fullset
+    url: "https://storage.googleapis.com/aist_plusplus_public/20210308/fullset.zip"
+    target: "downloads/fullset.zip"
+    extract_to: "annotations"
+
+# 官方视频下载配置（来自 aistplusplus_api/downloader.py）
+video_download:
+  list_url: "https://storage.googleapis.com/aist_plusplus_public/20121228/video_list.txt"
+  source_base_url: "https://aistdancedb.ongaaccel.jp/v1.0.0/video/10M"

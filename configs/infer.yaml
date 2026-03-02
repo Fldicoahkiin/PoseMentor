@@ -1,0 +1,9 @@
+coach:
+  yolo_weights: yolo11m-pose.pt
+  lift_checkpoint: artifacts/lift_demo.ckpt
+  norm_file: artifacts/lift_demo_norm.npz
+  template_dir: data/processed/aistpp/gt3d
+  seq_len: 81
+  det_conf: 0.35
+  joint_bad_threshold_mm: 60.0
+  tts_engine: edge_tts
