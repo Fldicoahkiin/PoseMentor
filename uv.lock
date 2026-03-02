@@ -1193,11 +1193,11 @@ name = "onnxruntime"
 version = "1.24.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "flatbuffers" },
-    { name = "numpy" },
-    { name = "packaging" },
-    { name = "protobuf" },
-    { name = "sympy" },
+    { name = "flatbuffers", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
+    { name = "numpy", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
+    { name = "packaging", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
+    { name = "protobuf", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
+    { name = "sympy", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/2c/4e/050c947924ffd8ff856d219d8f83ee3d4e7dc52d5a6770ff34a15675c437/onnxruntime-1.24.2-cp311-cp311-macosx_14_0_arm64.whl", hash = "sha256:69d1c75997276106d24e65da2e69ec4302af1b117fef414e2154740cde0f6214", size = 17217298, upload-time = "2026-02-19T17:15:09.891Z" },
@@ -1209,11 +1209,11 @@ name = "onnxruntime-gpu"
 version = "1.24.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "flatbuffers" },
-    { name = "numpy" },
-    { name = "packaging" },
-    { name = "protobuf" },
-    { name = "sympy" },
+    { name = "flatbuffers", marker = "sys_platform != 'emscripten'" },
+    { name = "numpy", marker = "sys_platform != 'emscripten'" },
+    { name = "packaging", marker = "sys_platform != 'emscripten'" },
+    { name = "protobuf", marker = "sys_platform != 'emscripten'" },
+    { name = "sympy", marker = "sys_platform != 'emscripten'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/17/29/d4f2122c3d1150b191b3219c1b3e99e1e12ea377d2d810ea9482c17587f1/onnxruntime_gpu-1.24.2-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:88ed80d143dfba314f1951305079665e6e86516bf19d96dfaf8c0f56cd9fae1b", size = 252634764, upload-time = "2026-02-19T17:09:49.876Z" },
@@ -1419,6 +1419,7 @@ source = { editable = "." }
 dependencies = [
     { name = "edge-tts" },
     { name = "einops" },
+    { name = "fastapi" },
     { name = "fastdtw" },
     { name = "gradio" },
     { name = "gtts" },
@@ -1429,11 +1430,13 @@ dependencies = [
     { name = "pandas" },
     { name = "plotly" },
     { name = "pyyaml" },
+    { name = "requests" },
     { name = "scipy" },
     { name = "soundfile" },
     { name = "torch" },
     { name = "tqdm" },
     { name = "ultralytics" },
+    { name = "uvicorn" },
 ]
 
 [package.dev-dependencies]
@@ -1457,6 +1460,7 @@ windows = [
 requires-dist = [
     { name = "edge-tts", specifier = ">=7.0.0" },
     { name = "einops", specifier = ">=0.8.0" },
+    { name = "fastapi", specifier = ">=0.116.0" },
     { name = "fastdtw", specifier = ">=0.3.4" },
     { name = "gradio", specifier = ">=5.20.0" },
     { name = "gtts", specifier = ">=2.5.4" },
@@ -1467,11 +1471,13 @@ requires-dist = [
     { name = "pandas", specifier = ">=2.2.0" },
     { name = "plotly", specifier = ">=6.0.0" },
     { name = "pyyaml", specifier = ">=6.0.2" },
+    { name = "requests", specifier = ">=2.32.0" },
     { name = "scipy", specifier = ">=1.14.0" },
     { name = "soundfile", specifier = ">=0.13.1" },
     { name = "torch", specifier = ">=2.4.0" },
     { name = "tqdm", specifier = ">=4.67.0" },
     { name = "ultralytics", specifier = ">=8.3.0" },
+    { name = "uvicorn", specifier = ">=0.35.0" },
 ]
 
 [package.metadata.requires-dev]

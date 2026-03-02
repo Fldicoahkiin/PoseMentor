@@ -67,9 +67,36 @@ def _job_to_dict(job: JobRecord) -> dict[str, object]:
     }
 
 
+@app.get("/")
+def root() -> dict[str, str]:
+    return {
+        "service": "posementor-backend",
+        "status": "ok",
+        "health": "/health",
+        "docs": "/docs",
+    }
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/api/health")
+def health_compat() -> dict[str, str]:
+    # 兼容代理层将后端挂在 /api 前缀时的健康检查路径。
+    return {"status": "ok"}
+
+
+@app.get("/api")
+@app.get("/api/")
+def api_root() -> dict[str, str]:
+    return {
+        "service": "posementor-backend",
+        "status": "ok",
+        "health": "/api/health",
+        "docs": "/docs",
+    }
 
 
 @app.get("/jobs")
