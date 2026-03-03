@@ -51,6 +51,14 @@ def _runtime_dirs(local_cfg: dict[str, Any]) -> tuple[Path, Path]:
     return logs_dir, pids_dir
 
 
+def _ensure_project_dirs(local_cfg: dict[str, Any]) -> None:
+    (PROJECT_ROOT / "data" / "raw").mkdir(parents=True, exist_ok=True)
+    (PROJECT_ROOT / "data" / "processed").mkdir(parents=True, exist_ok=True)
+    (PROJECT_ROOT / "artifacts").mkdir(parents=True, exist_ok=True)
+    (PROJECT_ROOT / "outputs").mkdir(parents=True, exist_ok=True)
+    _runtime_dirs(local_cfg)
+
+
 def _pid_file(pids_dir: Path, service_name: str) -> Path:
     return pids_dir / f"{service_name}.pid"
 
@@ -240,14 +248,29 @@ def _doctor(local_cfg: dict[str, Any]) -> int:
 
     print("=== PoseMentor Doctor ===")
     all_ok = True
+    failed_items: list[str] = []
     for name, ok, detail in checks:
         mark = "OK " if ok else "FAIL"
         print(f"[{mark}] {name:<14} {detail}")
         all_ok = all_ok and ok
+        if not ok:
+            failed_items.append(name)
 
     if all_ok:
         print("[DONE] 环境检查通过")
         return 0
+
+    print("\n修复建议：")
+    if "命令 uv" in failed_items:
+        print("- 先安装 uv：https://docs.astral.sh/uv/")
+    if "命令 node" in failed_items or "命令 pnpm" in failed_items:
+        print("- 先安装 Node.js 20+ 和 pnpm，然后重跑 `uv run posementor init`")
+    if "本地配置" in failed_items:
+        print("- 先执行 `uv run posementor config` 生成本地配置")
+    if "AIST 注释目录" in failed_items:
+        print("- 执行 `uv run posementor quickstart --skip-train` 先准备数据")
+    if "YOLO 权重" in failed_items:
+        print("- 将 yolo11m-pose.pt 放在项目根目录，或先用官方2D流程训练")
 
     print("[WARN] 存在未通过项，请按上方提示处理")
     return 1
@@ -299,6 +322,17 @@ def _run_quickstart(local_cfg: dict[str, Any], args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="PoseMentor 一体化 CLI")
     sub = parser.add_subparsers(dest="command", required=True)
+
+    p_config = sub.add_parser("config", help="生成或更新本地配置")
+    p_config.add_argument("--force", action="store_true")
+    p_config.add_argument("--profile", default="quick")
+    p_config.add_argument("--backend-host", default="127.0.0.1")
+    p_config.add_argument("--backend-port", type=int, default=8787)
+    p_config.add_argument("--frontend-host", default="127.0.0.1")
+    p_config.add_argument("--frontend-port", type=int, default=7860)
+    p_config.add_argument("--dataset-id", default="aistpp")
+    p_config.add_argument("--standard-id", default="private_action_core")
+    p_config.add_argument("--config-path", default=str(LOCAL_CONFIG_FILE))
 
     p_config_init = sub.add_parser("config-init", help="初始化本地配置")
     p_config_init.add_argument("--force", action="store_true")
@@ -396,7 +430,7 @@ def main() -> None:
     cmd = args.command
     local_cfg = load_local_config(Path(getattr(args, "config_path", LOCAL_CONFIG_FILE)))
 
-    if cmd == "config-init":
+    if cmd in {"config", "config-init"}:
         overrides = {
             "profile": args.profile,
             "network.backend_host": args.backend_host,
@@ -425,6 +459,8 @@ def main() -> None:
 
     if cmd == "init":
         init_local_config(Path(args.config_path), force=args.force_config)
+        local_cfg = load_local_config(Path(args.config_path))
+        _ensure_project_dirs(local_cfg)
         env = dict(os.environ)
         env["UV_CACHE_DIR"] = str(PROJECT_ROOT / ".uv_cache")
 

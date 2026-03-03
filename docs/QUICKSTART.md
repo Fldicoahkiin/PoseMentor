@@ -176,7 +176,7 @@ uv run python visualize_multiview_report.py --manifest data/processed/multiview/
 ## 9. CLI 一体化命令
 
 ```bash
-uv run posementor config-init --force
+uv run posementor config --force
 uv run posementor init
 uv run posementor quickstart --epochs 1 --export-onnx --up
 uv run posementor status

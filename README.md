@@ -174,7 +174,7 @@ uv run python visualize_multiview_report.py --manifest data/processed/multiview/
 示例：
 
 ```bash
-uv run posementor config-init --force
+uv run posementor config --force
 uv run posementor doctor
 uv run posementor up
 uv run posementor status

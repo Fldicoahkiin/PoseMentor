@@ -84,7 +84,7 @@ pnpm dev --host 127.0.0.1 --port 7860
 
 也可使用 CLI 控制：
 
-- `uv run posementor config-init`
+- `uv run posementor config`
 - `uv run posementor init`
 - `uv run posementor up`
 - `uv run posementor status`
