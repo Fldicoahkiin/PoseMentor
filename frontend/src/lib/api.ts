@@ -34,6 +34,42 @@ export type ArtifactStatus = {
   summary_url: string;
 };
 
+export type StandardItem = {
+  id: string;
+  name: string;
+  source: string;
+  stage: string;
+  notes: string;
+};
+
+export type SourcePreviewItem = {
+  name: string;
+  path: string;
+  url: string;
+  size_bytes: number;
+};
+
+export type SourcePreviewPayload = {
+  dataset_id: string;
+  video_root: string;
+  samples: SourcePreviewItem[];
+};
+
+export type ArtifactManifestItem = {
+  name: string;
+  path: string;
+  url: string;
+  kind: string;
+  size_bytes: number;
+  updated_at: string;
+};
+
+export type ArtifactManifestPayload = {
+  count: number;
+  by_kind: Record<string, number>;
+  files: ArtifactManifestItem[];
+};
+
 const baseURL = (import.meta.env.VITE_BACKEND_URL as string | undefined) || "http://127.0.0.1:8787";
 export const backendBaseUrl = baseURL.replace(/\/+$/, "");
 
@@ -52,6 +88,11 @@ export async function fetchDatasets() {
   return data.datasets;
 }
 
+export async function fetchStandards() {
+  const { data } = await client.get<{ standards: StandardItem[] }>("/standards");
+  return data.standards;
+}
+
 export async function fetchJobs() {
   const { data } = await client.get<{ jobs: JobItem[] }>("/jobs");
   return data.jobs;
@@ -64,6 +105,20 @@ export async function fetchJobLog(jobId: string) {
 
 export async function fetchArtifactStatus() {
   const { data } = await client.get<ArtifactStatus>("/artifacts/status");
+  return data;
+}
+
+export async function fetchArtifactManifest(limit = 200) {
+  const { data } = await client.get<ArtifactManifestPayload>("/artifacts/manifest", {
+    params: { limit },
+  });
+  return data;
+}
+
+export async function fetchSourcePreview(datasetId: string, limit = 4) {
+  const { data } = await client.get<SourcePreviewPayload>("/workspace/source-preview", {
+    params: { dataset_id: datasetId, limit },
+  });
   return data;
 }
 
@@ -126,4 +181,3 @@ export async function createEvaluateJob(payload: {
   const { data } = await client.post<{ job_id: string }>("/jobs/evaluate", payload);
   return data.job_id;
 }
-

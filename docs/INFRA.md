@@ -9,6 +9,7 @@
 - `posementor_cli.py`：统一 CLI 入口
 - `scripts/launch_macos.sh` / `scripts/launch_windows.ps1`：本地一键启动脚本
 - `configs/datasets.yaml`：数据集注册表（AIST++ / 自定义数据源扩展位）
+- `configs/standards.yaml`：评分标准库注册表（业务标准动作模板版本）
 
 ## 2. 运行拓扑
 
@@ -30,6 +31,14 @@ flowchart LR
 - `GET /api/health`
 - `GET /datasets`
 - `GET /api/datasets`
+- `GET /standards`
+- `GET /api/standards`
+- `GET /workspace/source-preview`
+- `GET /api/workspace/source-preview`
+- `GET /artifacts/status`
+- `GET /api/artifacts/status`
+- `GET /artifacts/manifest`
+- `GET /api/artifacts/manifest`
 
 任务路由：
 - `GET /jobs`

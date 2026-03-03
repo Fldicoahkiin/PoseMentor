@@ -191,9 +191,13 @@ uv run python posementor_cli.py prepare-multiview --config configs/multiview.yam
 
 - 健康检查：`GET /health`、`GET /api/health`
 - 数据集注册：`GET /datasets`、`GET /api/datasets`
+- 标准库注册：`GET /standards`、`GET /api/standards`
+- 素材预览：`GET /workspace/source-preview`、`GET /api/workspace/source-preview`
 - 任务列表：`GET /jobs`
 - 任务详情：`GET /jobs/{job_id}`
 - 日志读取：`GET /jobs/{job_id}/log`
+- 产物状态：`GET /artifacts/status`、`GET /api/artifacts/status`
+- 产物清单：`GET /artifacts/manifest`、`GET /api/artifacts/manifest`
 - 数据任务：`POST /jobs/data/prepare`
 - 提取任务：`POST /jobs/pose/extract`
 - 训练任务：`POST /jobs/train`

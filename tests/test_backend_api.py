@@ -38,6 +38,14 @@ def test_datasets_route_returns_registry() -> None:
     assert any(item.get("id") == "aistpp" for item in payload["datasets"])
 
 
+def test_standards_route_returns_registry() -> None:
+    response = client.get("/standards")
+    assert response.status_code == 200
+    payload = response.json()
+    assert isinstance(payload.get("standards"), list)
+    assert any(item.get("source") == "private" for item in payload["standards"])
+
+
 def test_invalid_dataset_is_rejected() -> None:
     response = client.post("/jobs/train", json={"dataset_id": "unknown_dataset"})
     assert response.status_code == 400
@@ -50,3 +58,20 @@ def test_artifact_status_route() -> None:
     payload = response.json()
     assert "curves_exists" in payload
     assert "sample_2d_url" in payload
+
+
+def test_artifact_manifest_route() -> None:
+    response = client.get("/artifacts/manifest")
+    assert response.status_code == 200
+    payload = response.json()
+    assert "count" in payload
+    assert "files" in payload
+    assert isinstance(payload["files"], list)
+
+
+def test_workspace_source_preview_route() -> None:
+    response = client.get("/workspace/source-preview", params={"dataset_id": "aistpp", "limit": 2})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["dataset_id"] == "aistpp"
+    assert "samples" in payload

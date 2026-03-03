@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -16,7 +17,9 @@ from posementor.utils.io import ensure_dir, load_yaml
 PROJECT_ROOT = Path(__file__).resolve().parent
 JOB_ROOT = PROJECT_ROOT / "outputs" / "job_center"
 DATASET_REGISTRY_FILE = PROJECT_ROOT / "configs" / "datasets.yaml"
+STANDARD_REGISTRY_FILE = PROJECT_ROOT / "configs" / "standards.yaml"
 ARTIFACT_ROOT = ensure_dir(PROJECT_ROOT / "artifacts")
+DATA_ROOT = ensure_dir(PROJECT_ROOT / "data")
 
 store = JobStore(root=JOB_ROOT)
 runner = JobRunner(store=store, cwd=PROJECT_ROOT)
@@ -30,6 +33,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.mount("/artifacts-files", StaticFiles(directory=ARTIFACT_ROOT), name="artifacts-files")
+app.mount("/data-files", StaticFiles(directory=DATA_ROOT), name="data-files")
 
 
 class DataPrepareRequest(BaseModel):
@@ -89,6 +93,26 @@ def _read_dataset_registry() -> dict:
     return {"datasets": datasets}
 
 
+def _read_standard_registry() -> dict:
+    if not STANDARD_REGISTRY_FILE.exists():
+        return {"standards": []}
+    data = load_yaml(STANDARD_REGISTRY_FILE)
+    if not isinstance(data, dict):
+        return {"standards": []}
+    standards = data.get("standards", [])
+    if not isinstance(standards, list):
+        standards = []
+    return {"standards": standards}
+
+
+def _find_dataset(dataset_id: str) -> dict | None:
+    registry = _read_dataset_registry()
+    for item in registry["datasets"]:
+        if isinstance(item, dict) and str(item.get("id")) == dataset_id:
+            return item
+    return None
+
+
 def _assert_dataset_exists(dataset_id: str) -> None:
     registry = _read_dataset_registry()
     ids = {str(item.get("id")) for item in registry["datasets"] if isinstance(item, dict)}
@@ -117,6 +141,38 @@ def _job_to_dict(job: JobRecord) -> dict[str, object]:
         "log_path": job.log_path,
         "error_message": job.error_message,
     }
+
+
+def _resolve_video_root_from_data_config(config_file: Path) -> Path | None:
+    if not config_file.exists():
+        return None
+    data = load_yaml(config_file)
+    if not isinstance(data, dict):
+        return None
+    if isinstance(data.get("videos_root"), str):
+        return PROJECT_ROOT / str(data["videos_root"])
+    if isinstance(data.get("video_root"), str):
+        return PROJECT_ROOT / str(data["video_root"])
+    if isinstance(data.get("aist_root"), str) and isinstance(data.get("videos_subdir"), str):
+        return PROJECT_ROOT / str(data["aist_root"]) / str(data["videos_subdir"])
+    return None
+
+
+def _artifact_kind(path: Path) -> str:
+    suffix = path.suffix.lower()
+    if suffix in {".ckpt", ".pth", ".pt", ".onnx", ".npz"}:
+        return "model"
+    if "visualizations" in path.parts:
+        return "visualization"
+    if suffix in {".csv", ".json", ".txt", ".yaml", ".yml"}:
+        return "report"
+    return "other"
+
+
+def _to_project_relative(path: Path) -> str:
+    if path.is_relative_to(PROJECT_ROOT):
+        return path.relative_to(PROJECT_ROOT).as_posix()
+    return str(path)
 
 
 @app.get("/")
@@ -162,6 +218,53 @@ def list_datasets() -> dict:
     return _read_dataset_registry()
 
 
+@app.get("/standards")
+@app.get("/api/standards")
+def list_standards() -> dict:
+    return _read_standard_registry()
+
+
+@app.get("/workspace/source-preview")
+@app.get("/api/workspace/source-preview")
+def source_preview(dataset_id: str = "aistpp", limit: int = 3) -> dict[str, object]:
+    _assert_dataset_exists(dataset_id)
+    bounded_limit = max(1, min(limit, 20))
+
+    dataset = _find_dataset(dataset_id)
+    data_config = str(dataset.get("data_config", "")).strip() if dataset else ""
+    video_root: Path | None = None
+
+    if data_config:
+        video_root = _resolve_video_root_from_data_config(PROJECT_ROOT / data_config)
+    if video_root is None and dataset_id == "aistpp":
+        video_root = PROJECT_ROOT / "data" / "raw" / "aistpp" / "videos"
+
+    samples: list[dict[str, object]] = []
+    if video_root and video_root.exists():
+        candidates = sorted(video_root.rglob("*.mp4"))
+        for path in candidates[:bounded_limit]:
+            rel_project = _to_project_relative(path)
+            stat = path.stat()
+            url = ""
+            if path.is_relative_to(DATA_ROOT):
+                rel_data = path.relative_to(DATA_ROOT).as_posix()
+                url = f"/data-files/{rel_data}"
+            samples.append(
+                {
+                    "name": path.name,
+                    "path": rel_project,
+                    "url": url,
+                    "size_bytes": stat.st_size,
+                }
+            )
+
+    return {
+        "dataset_id": dataset_id,
+        "video_root": _to_project_relative(video_root) if video_root else "",
+        "samples": samples,
+    }
+
+
 @app.get("/artifacts/status")
 @app.get("/api/artifacts/status")
 def artifact_status() -> dict[str, object]:
@@ -179,6 +282,39 @@ def artifact_status() -> dict[str, object]:
         "sample_3d_url": "/artifacts-files/visualizations/samples/sample_3d_latest.html",
         "summary_exists": summary_file.exists(),
         "summary_url": "/artifacts-files/visualizations/samples/sample_summary_latest.txt",
+    }
+
+
+@app.get("/artifacts/manifest")
+@app.get("/api/artifacts/manifest")
+def artifact_manifest(limit: int = 200) -> dict[str, object]:
+    bounded_limit = max(1, min(limit, 1000))
+    files = [path for path in ARTIFACT_ROOT.rglob("*") if path.is_file()]
+    files.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+    files = files[:bounded_limit]
+
+    rows: list[dict[str, object]] = []
+    by_kind: dict[str, int] = {}
+    for path in files:
+        stat = path.stat()
+        rel = path.relative_to(ARTIFACT_ROOT).as_posix()
+        kind = _artifact_kind(path)
+        by_kind[kind] = by_kind.get(kind, 0) + 1
+        rows.append(
+            {
+                "name": path.name,
+                "path": rel,
+                "url": f"/artifacts-files/{rel}",
+                "kind": kind,
+                "size_bytes": stat.st_size,
+                "updated_at": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+            }
+        )
+
+    return {
+        "count": len(rows),
+        "by_kind": by_kind,
+        "files": rows,
     }
 
 
