@@ -16,8 +16,11 @@
 ```mermaid
 flowchart LR
     subgraph Data["数据准备"]
-        A["AIST++ fullset.zip"] --> B["GT3D 预处理"]
+        A["AIST++ 注释（9机位）"] --> B["GT3D 预处理"]
         C["AIST++ 视频"] --> D["YOLO11 批量 2D 提取"]
+        X["自采单视角视频"] --> D
+        Y["自采四机位视频"] --> Z["对齐/格式化（已实现）"]
+        Z --> D
         B --> E["3D Lift 训练"]
         D --> E
     end
@@ -214,3 +217,5 @@ uv run python posementor_cli.py prepare-multiview --config configs/multiview.yam
 - 排障手册：[`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md)
 - 基础设施：[`docs/INFRA.md`](docs/INFRA.md)
 - 模型产物：[`docs/MODEL_ARTIFACTS.md`](docs/MODEL_ARTIFACTS.md)
+- 训练框架：[`docs/TRAINING_PIPELINE.md`](docs/TRAINING_PIPELINE.md)
+- 数据规格与采集：[`docs/DATASET_CAPTURE_GUIDE.md`](docs/DATASET_CAPTURE_GUIDE.md)
