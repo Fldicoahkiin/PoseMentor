@@ -2,12 +2,13 @@
 
 ## 1. 组件
 
-- `backend_api.py`：FastAPI 任务编排入口
+- `backend_api.py`：FastAPI 任务编排入口（后端边界）
 - `src/posementor/infra/job_store.py`：任务状态持久化
 - `src/posementor/infra/command_runner.py`：子进程任务执行与日志采集
-- `frontend/`：React 管理与演示前端（重构中）
+- `frontend/`：React 管理与演示前端（前端边界）
 - `posementor_cli.py`：统一 CLI 入口
 - `scripts/launch_macos.sh` / `scripts/launch_windows.ps1`：本地一键启动脚本
+- `configs/datasets.yaml`：数据集注册表（AIST++ / 自定义数据源扩展位）
 
 ## 2. 运行拓扑
 
@@ -27,6 +28,8 @@ flowchart LR
 - `GET /health`
 - `GET /api`
 - `GET /api/health`
+- `GET /datasets`
+- `GET /api/datasets`
 
 任务路由：
 - `GET /jobs`
@@ -75,5 +78,18 @@ pnpm dev --host 127.0.0.1 --port 7860
 
 前端稳定后可按以下结构拆分容器：
 - `backend-api`：FastAPI + 任务执行
-- `frontend`：静态资源服务或 Node runtime
+- `frontend`：Node + Vite 开发服务（当前 compose 已接入）
 - `worker`（可选）：独立训练/评测执行进程
+
+当前可直接运行：
+
+```bash
+cd docker
+docker compose up --build
+```
+
+## 7. 扩展位说明
+
+- 数据源扩展：在 `configs/datasets.yaml` 注册 `dataset_id`
+- 2D 提取扩展：`extract_pose_yolo11.py` 支持 `--video-root`、`--out-dir`、`--recursive`
+- 训练扩展：`train_3d_lift_demo.py` 支持 `--yolo2d-dir`、`--gt3d-dir`、`--artifact-dir`

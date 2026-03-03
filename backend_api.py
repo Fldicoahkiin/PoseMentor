@@ -5,13 +5,15 @@ import argparse
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from posementor.infra.command_runner import JobRunner
 from posementor.infra.job_store import JobRecord, JobStore
+from posementor.utils.io import load_yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 JOB_ROOT = PROJECT_ROOT / "outputs" / "job_center"
+DATASET_REGISTRY_FILE = PROJECT_ROOT / "configs" / "datasets.yaml"
 
 store = JobStore(root=JOB_ROOT)
 runner = JobRunner(store=store, cwd=PROJECT_ROOT)
@@ -20,6 +22,7 @@ app = FastAPI(title="PoseMentor Backend", version="0.1.0")
 
 
 class DataPrepareRequest(BaseModel):
+    dataset_id: str = "aistpp"
     config: str = "configs/data.yaml"
     download_annotations: bool = True
     extract_annotations: bool = True
@@ -30,14 +33,23 @@ class DataPrepareRequest(BaseModel):
 
 
 class ExtractRequest(BaseModel):
+    dataset_id: str = "aistpp"
     config: str = "configs/data.yaml"
+    input_dir: str | None = None
+    out_dir: str | None = None
+    recursive: bool = False
+    video_ext: str = "mp4"
     weights: str = "yolo11m-pose.pt"
     conf: float = 0.35
     max_videos: int = 0
 
 
 class TrainRequest(BaseModel):
+    dataset_id: str = "aistpp"
     config: str = "configs/train.yaml"
+    yolo2d_dir: str | None = None
+    gt3d_dir: str | None = None
+    artifact_dir: str | None = None
     export_onnx: bool = True
 
 
@@ -47,10 +59,38 @@ class MultiViewRequest(BaseModel):
 
 
 class EvaluateRequest(BaseModel):
+    dataset_id: str = "aistpp"
     input_dir: str = "data/raw/aistpp/videos"
     style: str = "gBR"
     max_videos: int = 10
     output_csv: str = "outputs/eval/summary.csv"
+
+
+def _read_dataset_registry() -> dict:
+    if not DATASET_REGISTRY_FILE.exists():
+        return {"datasets": []}
+    data = load_yaml(DATASET_REGISTRY_FILE)
+    if not isinstance(data, dict):
+        return {"datasets": []}
+    datasets = data.get("datasets", [])
+    if not isinstance(datasets, list):
+        datasets = []
+    return {"datasets": datasets}
+
+
+def _assert_dataset_exists(dataset_id: str) -> None:
+    registry = _read_dataset_registry()
+    ids = {str(item.get("id")) for item in registry["datasets"] if isinstance(item, dict)}
+    if dataset_id not in ids:
+        raise HTTPException(status_code=400, detail=f"未知 dataset_id: {dataset_id}")
+
+
+def _assert_aist_dataset(dataset_id: str) -> None:
+    if dataset_id != "aistpp":
+        raise HTTPException(
+            status_code=400,
+            detail=f"dataset_id={dataset_id} 目前仅支持通用提取/训练接口，数据准备任务暂只支持 aistpp",
+        )
 
 
 def _job_to_dict(job: JobRecord) -> dict[str, object]:
@@ -105,6 +145,12 @@ def list_jobs() -> dict[str, list[dict[str, object]]]:
     return {"jobs": [_job_to_dict(job) for job in store.list_jobs()]}
 
 
+@app.get("/datasets")
+@app.get("/api/datasets")
+def list_datasets() -> dict:
+    return _read_dataset_registry()
+
+
 @app.get("/jobs/{job_id}")
 def get_job(job_id: str) -> dict[str, object]:
     try:
@@ -133,6 +179,9 @@ def get_job_log(job_id: str, max_chars: int = 8000) -> dict[str, str]:
 
 @app.post("/jobs/data/prepare")
 def start_data_prepare(req: DataPrepareRequest) -> dict[str, str]:
+    _assert_dataset_exists(req.dataset_id)
+    _assert_aist_dataset(req.dataset_id)
+
     if req.download_videos and not req.agree_license:
         raise HTTPException(status_code=400, detail="download_videos=true 时必须勾选 agree_license")
 
@@ -162,6 +211,8 @@ def start_data_prepare(req: DataPrepareRequest) -> dict[str, str]:
 
 @app.post("/jobs/pose/extract")
 def start_pose_extract(req: ExtractRequest) -> dict[str, str]:
+    _assert_dataset_exists(req.dataset_id)
+
     command = [
         "uv",
         "run",
@@ -173,16 +224,26 @@ def start_pose_extract(req: ExtractRequest) -> dict[str, str]:
         req.weights,
         "--conf",
         str(req.conf),
+        "--video-ext",
+        req.video_ext,
     ]
+    if req.input_dir:
+        command.extend(["--video-root", req.input_dir])
+    if req.out_dir:
+        command.extend(["--out-dir", req.out_dir])
+    if req.recursive:
+        command.append("--recursive")
     if req.max_videos > 0:
         command.extend(["--max-videos", str(req.max_videos)])
 
-    job_id = runner.submit(name="pose_extract", command=command)
+    job_id = runner.submit(name=f"pose_extract_{req.dataset_id}", command=command)
     return {"job_id": job_id}
 
 
 @app.post("/jobs/train")
 def start_train(req: TrainRequest) -> dict[str, str]:
+    _assert_dataset_exists(req.dataset_id)
+
     command = [
         "uv",
         "run",
@@ -191,10 +252,16 @@ def start_train(req: TrainRequest) -> dict[str, str]:
         "--config",
         req.config,
     ]
+    if req.yolo2d_dir:
+        command.extend(["--yolo2d-dir", req.yolo2d_dir])
+    if req.gt3d_dir:
+        command.extend(["--gt3d-dir", req.gt3d_dir])
+    if req.artifact_dir:
+        command.extend(["--artifact-dir", req.artifact_dir])
     if req.export_onnx:
         command.append("--export-onnx")
 
-    job_id = runner.submit(name="train_3d_lift", command=command)
+    job_id = runner.submit(name=f"train_3d_lift_{req.dataset_id}", command=command)
     return {"job_id": job_id}
 
 
@@ -217,6 +284,8 @@ def start_multiview_prepare(req: MultiViewRequest) -> dict[str, str]:
 
 @app.post("/jobs/evaluate")
 def start_evaluate(req: EvaluateRequest) -> dict[str, str]:
+    _assert_dataset_exists(req.dataset_id)
+
     command = [
         "uv",
         "run",
@@ -232,7 +301,7 @@ def start_evaluate(req: EvaluateRequest) -> dict[str, str]:
         req.output_csv,
     ]
 
-    job_id = runner.submit(name="evaluate_model", command=command)
+    job_id = runner.submit(name=f"evaluate_model_{req.dataset_id}", command=command)
     return {"job_id": job_id}
 
 

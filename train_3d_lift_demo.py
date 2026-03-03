@@ -96,6 +96,9 @@ class LiftLightningModule(L.LightningModule):
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="AIST++ 单视角 3D lift 训练脚本（Demo）")
     parser.add_argument("--config", type=Path, default=Path("configs/train.yaml"))
+    parser.add_argument("--yolo2d-dir", type=Path, default=None, help="训练2D目录，默认取 config.data.yolo2d_dir")
+    parser.add_argument("--gt3d-dir", type=Path, default=None, help="训练3D目录，默认取 config.data.gt3d_dir")
+    parser.add_argument("--artifact-dir", type=Path, default=None, help="输出目录，默认取 config.train.artifact_dir")
     parser.add_argument("--export-onnx", action="store_true")
     parser.add_argument("--epochs", type=int, default=0, help="覆盖配置中的训练轮数，0 表示使用配置值")
     parser.add_argument(
@@ -152,8 +155,8 @@ def main() -> None:
     train_cfg = cfg["train"]
     model_cfg = cfg["model"]
 
-    yolo_dir = Path(data_cfg["yolo2d_dir"])
-    gt_dir = Path(data_cfg["gt3d_dir"])
+    yolo_dir = args.yolo2d_dir if args.yolo2d_dir is not None else Path(data_cfg["yolo2d_dir"])
+    gt_dir = args.gt3d_dir if args.gt3d_dir is not None else Path(data_cfg["gt3d_dir"])
 
     train_pairs = load_sequence_pairs(
         yolo_dir=yolo_dir,
@@ -226,7 +229,7 @@ def main() -> None:
         max_seq_len=seq_len,
     )
 
-    artifact_dir = ensure_dir(Path(train_cfg["artifact_dir"]))
+    artifact_dir = ensure_dir(args.artifact_dir if args.artifact_dir is not None else Path(train_cfg["artifact_dir"]))
     ckpt_cb = ModelCheckpoint(
         dirpath=artifact_dir,
         filename="lift-demo-{epoch:02d}-{val_mpjpe_mm:.2f}",

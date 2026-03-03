@@ -2,6 +2,11 @@
 
 React + TypeScript + Vite 前端工程。
 
+职责边界：
+- 只负责交互与可视化
+- 通过后端 API 获取任务和结果
+- 不直接调用训练脚本或读写模型文件
+
 ## 启动
 
 ```bash
@@ -28,6 +33,8 @@ pnpm preview
 cd /Users/mac/WorkSpace/Python_Project/posementor
 uv run python backend_api.py
 ```
+
+建议在前端中统一以 `dataset_id` 与后端交互，便于后续接入非 AIST++ 数据源。
 
 ## 目录
 

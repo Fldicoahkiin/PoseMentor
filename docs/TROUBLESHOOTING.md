@@ -121,3 +121,17 @@ ls -la artifacts/visualizations
 正常应包含：
 - `training_curves.html`
 - `training_history.csv`
+
+## 10. 后端返回 `未知 dataset_id`
+
+现象：
+- 调用任务接口时返回 `未知 dataset_id`
+
+修复：
+- 先检查 `configs/datasets.yaml` 是否存在该 `id`
+- 确认请求里 `dataset_id` 拼写一致
+- 可先调用：
+
+```bash
+curl http://127.0.0.1:8787/datasets
+```

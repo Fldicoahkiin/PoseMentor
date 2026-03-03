@@ -28,3 +28,17 @@ def test_api_root_route() -> None:
     payload = response.json()
     assert payload["service"] == "posementor-backend"
     assert payload["health"] == "/api/health"
+
+
+def test_datasets_route_returns_registry() -> None:
+    response = client.get("/datasets")
+    assert response.status_code == 200
+    payload = response.json()
+    assert isinstance(payload.get("datasets"), list)
+    assert any(item.get("id") == "aistpp" for item in payload["datasets"])
+
+
+def test_invalid_dataset_is_rejected() -> None:
+    response = client.post("/jobs/train", json={"dataset_id": "unknown_dataset"})
+    assert response.status_code == 400
+    assert "未知 dataset_id" in response.json()["detail"]

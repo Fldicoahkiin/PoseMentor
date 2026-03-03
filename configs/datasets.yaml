@@ -1,0 +1,25 @@
+datasets:
+  - id: aistpp
+    name: "AIST++"
+    stage: "production"
+    mode: "singleview"
+    data_config: "configs/data.yaml"
+    train_config: "configs/train.yaml"
+    notes: "默认数据源，已接入完整预处理与训练链路。"
+
+  - id: custom_singleview
+    name: "Custom Singleview"
+    stage: "planned"
+    mode: "singleview"
+    data_config: ""
+    train_config: ""
+    notes: "预留自定义单视角数据集位，后续可在前后端直接选择。"
+
+  - id: custom_multiview
+    name: "Custom Multiview"
+    stage: "planned"
+    mode: "multiview"
+    data_config: "configs/multiview.yaml"
+    train_config: ""
+    notes: "预留四机位扩展位，对齐与YOLO提取链路已可复用。"
+

@@ -81,6 +81,10 @@ uv run python train_3d_lift_demo.py --config configs/train.yaml --export-onnx
 
 ## 5. 启动服务
 
+前后端分离启动：
+- 后端负责数据处理、训练、推理调度
+- 前端负责交互界面与任务展示
+
 ### 终端 A：启动后端
 
 ```bash
@@ -105,6 +109,7 @@ pnpm dev --host 127.0.0.1 --port 7860
 ```bash
 curl http://127.0.0.1:8787/health
 curl http://127.0.0.1:8787/api/health
+curl http://127.0.0.1:8787/datasets
 ```
 
 命令行推理：
@@ -145,4 +150,29 @@ uv run python visualize_multiview_report.py --manifest data/processed/multiview/
 uv run python posementor_cli.py prepare-aist --config configs/data.yaml --download --extract
 uv run python posementor_cli.py extract-aist2d --config configs/data.yaml
 uv run python posementor_cli.py train-lift --config configs/train.yaml --epochs 2
+```
+
+## 9. 自定义数据集扩展位（预留）
+
+当前后端通过 `configs/datasets.yaml` 管理数据集注册信息。  
+如果后续加入自采集数据，推荐先走这条方式：
+
+1. 在 `configs/datasets.yaml` 新增一个 `dataset_id`
+2. 提取 2D 到自定义目录（可复用 YOLO 脚本）  
+3. 准备对应 3D 标签目录（单视角或四机位三角化结果）
+4. 训练时用目录覆盖参数：
+
+```bash
+uv run python train_3d_lift_demo.py \
+  --config configs/train.yaml \
+  --yolo2d-dir /path/to/custom_2d \
+  --gt3d-dir /path/to/custom_3d \
+  --artifact-dir /path/to/custom_artifacts
+```
+
+## 10. Docker 启动（可选）
+
+```bash
+cd docker
+docker compose up --build
 ```

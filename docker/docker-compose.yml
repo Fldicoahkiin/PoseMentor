@@ -5,7 +5,7 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    command: ["python", "backend_api.py"]
+    command: ["python", "backend_api.py", "--host", "0.0.0.0", "--port", "8787"]
     ports:
       - "8787:8787"
     volumes:
@@ -16,32 +16,19 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
 
-  admin-console:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile
-    command: ["python", "admin_console.py", "--api", "http://backend-api:8787", "--host", "0.0.0.0", "--port", "7861"]
-    ports:
-      - "7861:7861"
-    depends_on:
-      - backend-api
-    volumes:
-      - ../data:/app/data
-      - ../artifacts:/app/artifacts
-      - ../outputs:/app/outputs
-      - ../configs:/app/configs
-
-  posementor-app:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile
-    command: ["python", "app_demo.py", "--host", "0.0.0.0", "--port", "7860"]
+  frontend:
+    image: node:20-alpine
+    working_dir: /app/frontend
+    command: >
+      sh -lc "corepack enable &&
+              pnpm install &&
+              pnpm dev --host 0.0.0.0 --port 7860"
     ports:
       - "7860:7860"
     depends_on:
       - backend-api
     volumes:
-      - ../data:/app/data
-      - ../artifacts:/app/artifacts
+      - ../frontend:/app/frontend
       - ../outputs:/app/outputs
-      - ../configs:/app/configs
+    environment:
+      - VITE_BACKEND_URL=http://backend-api:8787

@@ -1,9 +1,10 @@
-# PoseMentor
+# PoseMentor（姿态教练）
 
-AIST++ 单摄像头动作教学系统（本地运行）。
+项目全称：**基于 AI 单摄像头实时姿态评估与纠错的舞蹈体育教学系统**  
+工程代号：`PoseMentor`
 
 当前主链路：
-- 数据集：仅使用 AIST++
+- 数据集：AIST++（默认）+ 自定义数据集扩展位
 - 输入：摄像头 / 单视频
 - 输出：实时评分、错误关节提示、语音反馈
 - 推理链路：YOLO11-Pose -> 3D Lift -> DTW 对齐与评分
@@ -95,6 +96,12 @@ uv run python download_and_prepare_aist.py --config configs/data.yaml --download
 uv run python extract_pose_aist2d.py --config configs/data.yaml
 ```
 
+可用数据集清单（后端注册表）：
+
+```bash
+curl http://127.0.0.1:8787/datasets
+```
+
 ## 常用命令
 
 提取 2D 关键点：
@@ -112,6 +119,25 @@ uv run python train_3d_lift_demo.py --config configs/train.yaml --export-onnx
 训练完成后可视化输出：
 - `artifacts/visualizations/training_curves.html`
 - `artifacts/visualizations/training_history.csv`
+
+## 训练产物说明（训练后你得到什么）
+
+训练后核心产物有 3 类：
+
+- `artifacts/lift_demo.ckpt`：PyTorch/Lightning 权重（主推理权重）
+- `artifacts/lift_demo_norm.npz`：2D 归一化参数（训练/推理必须一致）
+- `artifacts/lift_demo.onnx`（可选）：部署版模型（ONNX Runtime / TensorRT）
+
+这个模型做的事：
+- 输入单摄像头 2D 关键点序列
+- 输出每一帧 3D 关节点轨迹
+- 供后续 DTW、MPJPE、角度误差打分模块使用
+
+最小使用方式：
+
+```bash
+uv run python inference_pipeline_demo.py --source webcam --show --style gBR
+```
 
 命令行推理：
 
@@ -160,6 +186,7 @@ uv run python posementor_cli.py prepare-multiview --config configs/multiview.yam
 默认地址：`http://127.0.0.1:8787`
 
 - 健康检查：`GET /health`、`GET /api/health`
+- 数据集注册：`GET /datasets`、`GET /api/datasets`
 - 任务列表：`GET /jobs`
 - 任务详情：`GET /jobs/{job_id}`
 - 日志读取：`GET /jobs/{job_id}/log`
@@ -173,8 +200,16 @@ uv run python posementor_cli.py prepare-multiview --config configs/multiview.yam
 - `outputs/job_center/jobs.json`
 - `outputs/job_center/logs/*.log`
 
+## 前后端边界
+
+- 前端（`frontend/`）：页面、交互、可视化、任务管理视图
+- 后端（`backend_api.py` + `src/posementor/`）：数据处理、训练调度、推理和任务状态
+
+前端只通过 HTTP API 调后端，不直接访问训练脚本。
+
 ## 其他文档
 
 - 快速执行：[`docs/QUICKSTART.md`](docs/QUICKSTART.md)
 - 排障手册：[`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md)
 - 基础设施：[`docs/INFRA.md`](docs/INFRA.md)
+- 模型产物：[`docs/MODEL_ARTIFACTS.md`](docs/MODEL_ARTIFACTS.md)
