@@ -68,7 +68,7 @@ target-version = "py311"
 select = ["E", "F", "I", "B", "UP"]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+pythonpath = ["src", "."]
 
 [project.scripts]
 posementor = "posementor.cli:main"

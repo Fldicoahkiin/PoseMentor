@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -238,4 +239,8 @@ def start_evaluate(req: EvaluateRequest) -> dict[str, str]:
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8787)
+    parser = argparse.ArgumentParser(description="PoseMentor Backend API")
+    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument("--port", type=int, default=8787)
+    cli_args = parser.parse_args()
+    uvicorn.run(app, host=cli_args.host, port=cli_args.port)

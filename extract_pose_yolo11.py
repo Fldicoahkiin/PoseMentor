@@ -15,6 +15,9 @@ from posementor.utils.io import ensure_dir, load_yaml
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="使用 YOLO11-Pose 批量提取 AIST++ 2D 关键点")
     parser.add_argument("--config", type=Path, default=Path("configs/data.yaml"))
+    parser.add_argument("--video-root", type=Path, default=None, help="视频目录，默认使用 data.yaml 中的 aist_root/videos_subdir")
+    parser.add_argument("--out-dir", type=Path, default=None, help="输出目录，默认使用 data.yaml 中的 processed_root/yolo2d")
+    parser.add_argument("--recursive", action="store_true", help="递归扫描视频目录，适用于四机位 session 树形目录")
     parser.add_argument("--weights", type=str, default="yolo11m-pose.pt")
     parser.add_argument("--conf", type=float, default=0.35)
     parser.add_argument("--max-videos", type=int, default=0, help="仅处理前 N 个视频，0 表示全部")
@@ -27,13 +30,16 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def find_video_files(video_root: Path, ext: str) -> list[Path]:
+def find_video_files(video_root: Path, ext: str, recursive: bool) -> list[Path]:
     pattern = f"*.{ext.lstrip('.')}"
+    if recursive:
+        return sorted(video_root.rglob(pattern))
     return sorted(video_root.glob(pattern))
 
 
 def style_from_filename(file_name: str) -> str:
-    return file_name.split("_")[0]
+    token = file_name.split("_")[0]
+    return token if token.startswith("g") else "unknown"
 
 
 def extract_single_video(model: YOLO, video_path: Path, conf: float) -> tuple[np.ndarray, float]:
@@ -63,10 +69,16 @@ def main() -> None:
     args = parse_args()
     cfg = load_yaml(args.config)
 
-    video_root = Path(cfg["aist_root"]) / cfg.get("videos_subdir", "videos")
-    out_root = ensure_dir(Path(cfg["processed_root"]) / "yolo2d")
+    video_root = (
+        args.video_root
+        if args.video_root is not None
+        else Path(cfg["aist_root"]) / cfg.get("videos_subdir", "videos")
+    )
+    out_root = ensure_dir(
+        args.out_dir if args.out_dir is not None else Path(cfg["processed_root"]) / "yolo2d"
+    )
 
-    videos = find_video_files(video_root, args.video_ext)
+    videos = find_video_files(video_root, args.video_ext, recursive=args.recursive)
     if args.max_videos > 0:
         videos = videos[: args.max_videos]
 
@@ -81,7 +93,11 @@ def main() -> None:
 
     print(f"[INFO] 待处理视频数: {len(videos)}")
     for idx, video_path in enumerate(videos, start=1):
-        seq_id = video_path.stem
+        if args.recursive:
+            rel = video_path.relative_to(video_root).with_suffix("")
+            seq_id = "__".join(rel.parts)
+        else:
+            seq_id = video_path.stem
         out_file = out_root / f"{seq_id}.npz"
         if out_file.exists():
             print(f"[SKIP] {seq_id} 已存在")

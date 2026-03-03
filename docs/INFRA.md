@@ -6,6 +6,8 @@
 - `src/posementor/infra/job_store.py`：任务状态持久化
 - `src/posementor/infra/command_runner.py`：子进程任务执行与日志采集
 - `frontend/`：React 管理与演示前端（重构中）
+- `posementor_cli.py`：统一 CLI 入口
+- `scripts/launch_macos.sh` / `scripts/launch_windows.ps1`：本地一键启动脚本
 
 ## 2. 运行拓扑
 
@@ -61,6 +63,11 @@ uv run python backend_api.py
 cd frontend
 pnpm dev --host 127.0.0.1 --port 7860
 ```
+
+也可使用一键脚本：
+
+- macOS：`./scripts/launch_macos.sh all`
+- Windows：`powershell -ExecutionPolicy Bypass -File .\scripts\launch_windows.ps1 -Action all`
 
 ## 6. Docker 说明
 

@@ -79,6 +79,11 @@ uv run python train_3d_lift_demo.py --config configs/train.yaml --export-onnx
 
 修复：
 - 将 `yolo11m-pose.pt` 放到项目根目录，或在命令里传入 `--weights /absolute/path/to/yolo11m-pose.pt`
+- 如果当前只需要先跑通训练，不依赖 YOLO，可改用：
+
+```bash
+uv run python extract_pose_aist2d.py --config configs/data.yaml
+```
 
 ## 6. 训练慢或显存不足
 
@@ -104,3 +109,15 @@ uv run python train_3d_lift_demo.py --config configs/train.yaml --export-onnx
 - `outputs/job_center/logs/*.log`
 
 后端日志建议直接看实时输出，便于定位子进程命令参数。
+
+## 9. 训练完成但没看到曲线文件
+
+检查目录：
+
+```bash
+ls -la artifacts/visualizations
+```
+
+正常应包含：
+- `training_curves.html`
+- `training_history.csv`

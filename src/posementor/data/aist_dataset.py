@@ -50,7 +50,13 @@ class AISTLiftDataset(Dataset[dict[str, torch.Tensor]]):
 
         kp2d = pair.kp2d[st : st + self.seq_len, :, :2].astype(np.float32)
         conf = pair.kp2d[st : st + self.seq_len, :, 2:3].astype(np.float32)
-        gt3d = pair.gt3d[st : st + self.seq_len].astype(np.float32)
+        gt3d_raw = pair.gt3d[st : st + self.seq_len].astype(np.float32)
+
+        valid3d = np.isfinite(gt3d_raw).all(axis=-1, keepdims=True).astype(np.float32)
+        gt3d = np.nan_to_num(gt3d_raw, nan=0.0, posinf=0.0, neginf=0.0)
+        kp2d = np.nan_to_num(kp2d, nan=0.0, posinf=0.0, neginf=0.0)
+        conf = np.nan_to_num(conf, nan=0.0, posinf=0.0, neginf=0.0)
+        conf = np.clip(conf, 0.0, 1.0) * valid3d
 
         kp2d = (kp2d - self.mean_2d) / self.std_2d
 
@@ -116,8 +122,11 @@ def compute_2d_norm_stats(pairs: list[SequencePair]) -> tuple[np.ndarray, np.nda
         std_2d = np.ones((1, 1, 2), dtype=np.float32)
         return mean_2d, std_2d
 
-    all_points = np.concatenate([pair.kp2d[:, :, :2] for pair in pairs], axis=0)
-    mean_2d = all_points.mean(axis=(0, 1), keepdims=True)
-    std_2d = all_points.std(axis=(0, 1), keepdims=True)
+    all_points = np.concatenate([pair.kp2d[:, :, :2] for pair in pairs], axis=0).astype(np.float32)
+    mean_2d = np.nanmean(all_points, axis=(0, 1), keepdims=True)
+    std_2d = np.nanstd(all_points, axis=(0, 1), keepdims=True)
+
+    mean_2d = np.nan_to_num(mean_2d, nan=0.0, posinf=0.0, neginf=0.0)
+    std_2d = np.nan_to_num(std_2d, nan=1.0, posinf=1.0, neginf=1.0)
     std_2d = np.clip(std_2d, 1e-6, None)
     return mean_2d.astype(np.float32), std_2d.astype(np.float32)

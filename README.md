@@ -7,6 +7,7 @@ AIST++ 单摄像头动作教学系统（本地运行）。
 - 输入：摄像头 / 单视频
 - 输出：实时评分、错误关节提示、语音反馈
 - 推理链路：YOLO11-Pose -> 3D Lift -> DTW 对齐与评分
+- 训练可视化：按 epoch 自动生成 HTML 曲线
 
 前端正在 `frontend/` 目录持续重构，后端和训练管线保持可用。
 
@@ -63,7 +64,8 @@ posementor/
 ```bash
 uv sync --group dev --group mac
 uv run python download_and_prepare_aist.py --config configs/data.yaml --download --extract
-uv run python train_3d_lift_demo.py --config configs/train.yaml --export-onnx
+uv run python extract_pose_aist2d.py --config configs/data.yaml
+uv run python train_3d_lift_demo.py --config configs/train.yaml --export-onnx --epochs 1
 uv run python backend_api.py
 ```
 
@@ -87,6 +89,12 @@ pnpm dev --host 127.0.0.1 --port 7860
 uv run python download_and_prepare_aist.py --config configs/data.yaml --download --extract
 ```
 
+快速构建训练用 2D（无需先跑 YOLO）：
+
+```bash
+uv run python extract_pose_aist2d.py --config configs/data.yaml
+```
+
 ## 常用命令
 
 提取 2D 关键点：
@@ -100,6 +108,10 @@ uv run python extract_pose_yolo11.py --weights yolo11m-pose.pt --config configs/
 ```bash
 uv run python train_3d_lift_demo.py --config configs/train.yaml --export-onnx
 ```
+
+训练完成后可视化输出：
+- `artifacts/visualizations/training_curves.html`
+- `artifacts/visualizations/training_history.csv`
 
 命令行推理：
 
@@ -117,6 +129,30 @@ uv run python evaluate_model_suite.py --input-dir data/raw/aistpp/videos --style
 
 ```bash
 uv run python prepare_multiview_dataset.py --config configs/multiview.yaml --limit-sessions 20
+```
+
+四机位视频同样可走 YOLO2D 提取链路（递归模式）：
+
+```bash
+uv run python extract_pose_yolo11.py --config configs/data.yaml --video-root data/processed/multiview --out-dir data/processed/multiview_pose2d --recursive --weights yolo11m-pose.pt
+```
+
+四机位处理报告：
+
+```bash
+uv run python visualize_multiview_report.py --manifest data/processed/multiview/multiview_manifest.csv
+```
+
+## CLI 集成
+
+统一入口脚本：`posementor_cli.py`
+
+示例：
+
+```bash
+uv run python posementor_cli.py extract-aist2d --config configs/data.yaml
+uv run python posementor_cli.py train-lift --config configs/train.yaml --epochs 2
+uv run python posementor_cli.py prepare-multiview --config configs/multiview.yaml --limit-sessions 10
 ```
 
 ## Backend API

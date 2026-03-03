@@ -60,6 +60,12 @@ uv run python -c "from pathlib import Path; from posementor.data.aist_loader imp
 uv run python extract_pose_yolo11.py --weights yolo11m-pose.pt --config configs/data.yaml
 ```
 
+若当前阶段优先验证训练链路，可直接使用 AIST++ 官方 2D 注释：
+
+```bash
+uv run python extract_pose_aist2d.py --config configs/data.yaml
+```
+
 ## 4. 训练 3D Lift
 
 ```bash
@@ -70,6 +76,8 @@ uv run python train_3d_lift_demo.py --config configs/train.yaml --export-onnx
 - `artifacts/lift_demo.ckpt`
 - `artifacts/lift_demo_norm.npz`
 - `artifacts/lift_demo.onnx`
+- `artifacts/visualizations/training_curves.html`
+- `artifacts/visualizations/training_history.csv`
 
 ## 5. 启动服务
 
@@ -117,4 +125,24 @@ uv run python evaluate_model_suite.py --input-dir data/raw/aistpp/videos --style
 
 ```bash
 uv run python prepare_multiview_dataset.py --config configs/multiview.yaml --limit-sessions 20
+```
+
+四机位 YOLO2D 提取（和 AIST++ 同一处理方式）：
+
+```bash
+uv run python extract_pose_yolo11.py --config configs/data.yaml --video-root data/processed/multiview --out-dir data/processed/multiview_pose2d --recursive --weights yolo11m-pose.pt
+```
+
+四机位可视化报告：
+
+```bash
+uv run python visualize_multiview_report.py --manifest data/processed/multiview/multiview_manifest.csv
+```
+
+## 8. CLI 一体化命令
+
+```bash
+uv run python posementor_cli.py prepare-aist --config configs/data.yaml --download --extract
+uv run python posementor_cli.py extract-aist2d --config configs/data.yaml
+uv run python posementor_cli.py train-lift --config configs/train.yaml --epochs 2
 ```

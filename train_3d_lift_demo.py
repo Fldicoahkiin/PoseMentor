@@ -19,6 +19,7 @@ from posementor.data.aist_dataset import (
 )
 from posementor.models.lift_net import PoseLiftTransformer, temporal_velocity_loss
 from posementor.utils.io import ensure_dir
+from posementor.utils.training_viz import TrainingVisualizationCallback
 
 
 class LiftLightningModule(L.LightningModule):
@@ -96,6 +97,27 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="AIST++ 单视角 3D lift 训练脚本（Demo）")
     parser.add_argument("--config", type=Path, default=Path("configs/train.yaml"))
     parser.add_argument("--export-onnx", action="store_true")
+    parser.add_argument("--epochs", type=int, default=0, help="覆盖配置中的训练轮数，0 表示使用配置值")
+    parser.add_argument(
+        "--max-train-pairs",
+        type=int,
+        default=0,
+        help="仅使用前 N 个训练序列（0 表示全部）",
+    )
+    parser.add_argument(
+        "--max-val-pairs",
+        type=int,
+        default=0,
+        help="仅使用前 N 个验证序列（0 表示全部）",
+    )
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=-1,
+        help="覆盖 dataloader 的 num_workers，-1 表示使用配置值",
+    )
+    parser.add_argument("--sample-stride", type=int, default=0, help="覆盖配置中的 sample_stride，0 表示使用配置值")
+    parser.add_argument("--seq-len", type=int, default=0, help="覆盖配置中的 seq_len，0 表示使用配置值")
     return parser.parse_args()
 
 
@@ -146,39 +168,52 @@ def main() -> None:
         split="val",
     )
 
+    if args.max_train_pairs > 0:
+        train_pairs = train_pairs[: args.max_train_pairs]
+    if args.max_val_pairs > 0:
+        val_pairs = val_pairs[: args.max_val_pairs]
+
     if not train_pairs:
-        raise RuntimeError("训练集为空，请先执行 extract_pose_yolo11.py 与 download_and_prepare_aist.py")
+        raise RuntimeError(
+            "训练集为空，请先执行 extract_pose_yolo11.py 或 extract_pose_aist2d.py，并完成 download_and_prepare_aist.py"
+        )
 
     mean_2d, std_2d = compute_2d_norm_stats(train_pairs)
 
+    seq_len = int(data_cfg["seq_len"]) if args.seq_len <= 0 else args.seq_len
+    sample_stride = int(data_cfg["sample_stride"]) if args.sample_stride <= 0 else args.sample_stride
+
     train_ds = AISTLiftDataset(
         pairs=train_pairs,
-        seq_len=int(data_cfg["seq_len"]),
-        sample_stride=int(data_cfg["sample_stride"]),
+        seq_len=seq_len,
+        sample_stride=sample_stride,
         mean_2d=mean_2d,
         std_2d=std_2d,
     )
     val_ds = AISTLiftDataset(
         pairs=val_pairs,
-        seq_len=int(data_cfg["seq_len"]),
-        sample_stride=int(data_cfg["sample_stride"]),
+        seq_len=seq_len,
+        sample_stride=sample_stride,
         mean_2d=mean_2d,
         std_2d=std_2d,
     )
 
+    num_workers = int(train_cfg["num_workers"]) if args.num_workers < 0 else args.num_workers
+    pin_memory = torch.cuda.is_available()
+
     train_loader = DataLoader(
         train_ds,
         batch_size=int(train_cfg["batch_size"]),
-        num_workers=int(train_cfg["num_workers"]),
+        num_workers=num_workers,
         shuffle=True,
-        pin_memory=True,
+        pin_memory=pin_memory,
     )
     val_loader = DataLoader(
         val_ds,
         batch_size=int(train_cfg["batch_size"]),
-        num_workers=int(train_cfg["num_workers"]),
+        num_workers=num_workers,
         shuffle=False,
-        pin_memory=True,
+        pin_memory=pin_memory,
     )
 
     model_module = LiftLightningModule(
@@ -188,7 +223,7 @@ def main() -> None:
         hidden_dim=int(model_cfg["hidden_dim"]),
         num_layers=int(model_cfg["num_layers"]),
         num_heads=int(model_cfg["num_heads"]),
-        max_seq_len=int(data_cfg["seq_len"]),
+        max_seq_len=seq_len,
     )
 
     artifact_dir = ensure_dir(Path(train_cfg["artifact_dir"]))
@@ -201,14 +236,17 @@ def main() -> None:
     )
 
     logger = CSVLogger(save_dir=str(artifact_dir / "logs"), name="lift_demo")
+    viz_cb = TrainingVisualizationCallback(output_dir=artifact_dir / "visualizations")
+
+    max_epochs = int(train_cfg["epochs"]) if args.epochs <= 0 else args.epochs
 
     trainer = L.Trainer(
-        max_epochs=int(train_cfg["epochs"]),
+        max_epochs=max_epochs,
         accelerator=train_cfg.get("accelerator", "auto"),
         devices=train_cfg.get("devices", "auto"),
         precision=train_cfg.get("precision", "16-mixed"),
         log_every_n_steps=10,
-        callbacks=[ckpt_cb, LearningRateMonitor(logging_interval="epoch")],
+        callbacks=[ckpt_cb, LearningRateMonitor(logging_interval="epoch"), viz_cb],
         logger=logger,
     )
 
@@ -228,6 +266,7 @@ def main() -> None:
     norm_file = artifact_dir / "lift_demo_norm.npz"
     np.savez_compressed(norm_file, mean_2d=mean_2d, std_2d=std_2d)
     print(f"[DONE] 归一化参数保存: {norm_file}")
+    print(f"[DONE] 训练曲线可视化: {artifact_dir / 'visualizations' / 'training_curves.html'}")
 
     if args.export_onnx:
         export_model = model_module.model
@@ -235,7 +274,7 @@ def main() -> None:
             state = torch.load(ckpt_cb.best_model_path, map_location="cpu")
             sd = {k.replace("model.", "", 1): v for k, v in state["state_dict"].items()}
             export_model.load_state_dict(sd, strict=False)
-        export_onnx(export_model, int(data_cfg["seq_len"]), artifact_dir / "lift_demo.onnx")
+        export_onnx(export_model, seq_len, artifact_dir / "lift_demo.onnx")
 
 
 if __name__ == "__main__":
