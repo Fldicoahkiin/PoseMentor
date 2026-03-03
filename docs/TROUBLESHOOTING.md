@@ -1,31 +1,106 @@
-# 常见问题与优化策略
+# Troubleshooting
 
-## 精度与稳定性
+## 1. `FileNotFoundError: 未找到 AIST++ 3D 注释文件`
 
-1. 先固定舞种模板（如 `gBR`），降低 DTW 错配概率。  
-2. 保持训练与推理归一化参数一致（`lift_demo_norm.npz`）。  
-3. 在对比前做髋中心对齐，减少平移误差干扰。  
-4. 用 Kalman 平滑 2D 关键点，抑制抖动。  
-5. 训练中启用速度损失，降低时序闪烁。  
-6. 评分阈值与语音阈值分开调参，避免过度提示。
+现象：
+- 运行 `download_and_prepare_aist.py --download --extract` 后仍报找不到 `data/raw/aistpp/annotations`
 
-## 实时性能
+排查：
 
-1. 输入分辨率先用 `640x480` 或 `960x540`。  
-2. YOLO 权重优先 `yolo11m-pose.pt`。  
-3. 若 GPU 紧张，降低 `seq_len` 和输入分辨率。  
-4. 优先使用本地 SSD，减少视频 IO 抖动。
+```bash
+ls -la data/raw/aistpp
+ls -la data/raw/aistpp/annotations
+```
 
-## 数据与多机位
+修复：
+- 重新执行：
 
-1. 若对齐误差大，检查 `configs/multiview.yaml` 的 `motion_ratio`。  
-2. 四机位 session 必须包含 `front/left/right/back` 四个文件。  
-3. 若视频起始静止时间长，提高 `scan_frames`。  
-4. 对齐后可先人工抽查 `session_meta.json`。
+```bash
+uv run python download_and_prepare_aist.py --config configs/data.yaml --download --extract
+```
 
-## 后台任务
+- 验证标注数量（fullset 应为 1408）：
 
-1. 任务状态文件：`outputs/job_center/jobs.json`。  
-2. 任务日志目录：`outputs/job_center/logs/`。  
-3. 管理后台连接失败先检查 `http://127.0.0.1:8787/health`。  
-4. 若任务卡住，先看日志最后输出再决定是否重启任务。
+```bash
+uv run python -c "from pathlib import Path; from posementor.data.aist_loader import find_gt3d_files; print(len(find_gt3d_files(Path('data/raw/aistpp/annotations'))))"
+```
+
+## 2. 浏览器显示 `detail: "Not Found"`
+
+现象：
+- 打开后端地址时只看到 `Not Found`
+
+确认接口：
+- `http://127.0.0.1:8787/`
+- `http://127.0.0.1:8787/health`
+- `http://127.0.0.1:8787/api`
+- `http://127.0.0.1:8787/api/health`
+
+如果这些地址仍返回 404，请先确认后端进程是否在运行。
+
+## 3. 无法连接 `127.0.0.1:7860`
+
+现象：
+- 浏览器提示连接失败
+
+排查：
+- 前端是否已启动：
+
+```bash
+cd frontend
+pnpm dev --host 127.0.0.1 --port 7860
+```
+
+- 端口是否被占用：
+
+```bash
+lsof -i :7860
+```
+
+## 4. `找不到 3D lift 权重: artifacts/lift_demo.ckpt`
+
+现象：
+- 推理时提示未找到模型权重
+
+修复：
+
+```bash
+uv run python train_3d_lift_demo.py --config configs/train.yaml --export-onnx
+```
+
+确保以下文件存在：
+- `artifacts/lift_demo.ckpt`
+- `artifacts/lift_demo_norm.npz`
+
+## 5. `yolo11m-pose.pt` 不存在
+
+现象：
+- 关键点提取或推理启动失败
+
+修复：
+- 将 `yolo11m-pose.pt` 放到项目根目录，或在命令里传入 `--weights /absolute/path/to/yolo11m-pose.pt`
+
+## 6. 训练慢或显存不足
+
+建议：
+- 在 `configs/train.yaml` 调小 `train.batch_size`
+- 保持 `seq_len=81`，先不要增大
+- 先跑子集验证流程，再跑全量
+
+## 7. 摄像头无法打开
+
+常见原因：
+- 系统未授权终端/浏览器访问摄像头
+- 设备被其他应用占用
+
+修复：
+- 关闭占用摄像头的应用
+- 在系统隐私设置里给当前应用授权
+
+## 8. 任务卡住或无输出
+
+排查日志：
+- `outputs/job_center/jobs.json`
+- `outputs/job_center/logs/*.log`
+
+后端日志建议直接看实时输出，便于定位子进程命令参数。
