@@ -1,43 +1,100 @@
 .btn-base {
-  @apply inline-flex items-center justify-center whitespace-nowrap rounded-lg text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+  border-radius: 0.75rem;
+  border: 1px solid transparent;
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1;
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+
+.btn-base:focus-visible {
+  outline: 2px solid #27272a;
+  outline-offset: 2px;
+}
+
+.btn-base:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .btn-default {
-  @apply bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm hover:shadow active:scale-[0.98] transition-all duration-200;
+  background: #18181b;
+  color: #fafafa;
+}
+
+.btn-default:hover:not(:disabled) {
+  background: #27272a;
 }
 
 .btn-destructive {
-  @apply bg-destructive text-destructive-foreground hover:bg-destructive/90 shadow-sm active:scale-[0.98] transition-all;
+  background: #dc2626;
+  color: #fafafa;
+}
+
+.btn-destructive:hover:not(:disabled) {
+  background: #b91c1c;
 }
 
 .btn-outline {
-  @apply border border-input bg-background hover:bg-accent hover:text-accent-foreground;
+  border-color: #d4d4d8;
+  background: #ffffff;
+  color: #27272a;
+}
+
+.btn-outline:hover:not(:disabled) {
+  background: #f4f4f5;
 }
 
 .btn-secondary {
-  @apply bg-secondary text-secondary-foreground hover:bg-secondary/80;
+  background: #f4f4f5;
+  color: #27272a;
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: #e4e4e7;
 }
 
 .btn-ghost {
-  @apply hover:bg-accent hover:text-accent-foreground;
+  background: transparent;
+  color: #27272a;
+}
+
+.btn-ghost:hover:not(:disabled) {
+  background: #f4f4f5;
 }
 
 .btn-link {
-  @apply text-primary underline-offset-4 hover:underline;
+  background: transparent;
+  color: #18181b;
+  text-decoration: underline;
+  text-underline-offset: 0.25rem;
 }
 
 .btn-size-default {
-  @apply h-10 px-4 py-2;
+  height: 2.5rem;
+  padding: 0.5rem 1rem;
 }
 
 .btn-size-sm {
-  @apply h-9 rounded-md px-3 text-xs;
+  height: 2.25rem;
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.75rem;
 }
 
 .btn-size-lg {
-  @apply h-11 rounded-xl px-8 text-base;
+  height: 2.75rem;
+  border-radius: 0.875rem;
+  padding: 0.5rem 2rem;
+  font-size: 1rem;
 }
 
 .btn-size-icon {
-  @apply h-10 w-10;
+  width: 2.5rem;
+  height: 2.5rem;
 }

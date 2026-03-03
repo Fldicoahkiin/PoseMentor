@@ -1,7 +1,6 @@
-# PoseMentor（姿态教练）
+# 姿态教练 PoseMentor
 
-项目全称：**基于 AI 单摄像头实时姿态评估与纠错的舞蹈体育教学系统**  
-工程代号：`PoseMentor`
+基于 AI 单摄像头实时姿态评估与纠错的舞蹈体育教学系统。
 
 当前主链路：
 - 数据集：AIST++（默认）+ 自定义数据集扩展位
@@ -119,8 +118,10 @@ uv run python train_3d_lift_demo.py --config configs/train.yaml --export-onnx
 训练完成后可视化输出：
 - `artifacts/visualizations/training_curves.html`
 - `artifacts/visualizations/training_history.csv`
+- `artifacts/visualizations/samples/sample_2d_latest.png`
+- `artifacts/visualizations/samples/sample_3d_latest.html`
 
-## 训练产物说明（训练后你得到什么）
+## 训练产物说明
 
 训练后核心产物有 3 类：
 

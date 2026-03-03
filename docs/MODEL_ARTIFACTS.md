@@ -28,6 +28,16 @@
 - 形式：CSV
 - 用途：用于报表、对比实验、追踪收敛
 
+## 6) `visualizations/samples/sample_2d_latest.png`
+
+- 形式：PNG 图片
+- 用途：查看训练样例素材（2D 关键点骨架）
+
+## 7) `visualizations/samples/sample_3d_latest.html`
+
+- 形式：Plotly HTML
+- 用途：查看同一训练样例下的 3D 骨骼（预测 vs 参考）
+
 ---
 
 ## 最小使用方式
@@ -45,4 +55,3 @@ uv run python train_3d_lift_demo.py \
   --gt3d-dir /path/to/3d \
   --artifact-dir /path/to/output
 ```
-

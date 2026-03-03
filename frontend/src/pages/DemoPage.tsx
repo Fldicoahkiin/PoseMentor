@@ -1,219 +1,199 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Camera, Upload, Video, RefreshCw, AlertCircle, Volume2, ChartBar } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Activity, Database, RefreshCw, Server, Image as ImageIcon, Cuboid } from 'lucide-react';
 import { Button } from '../components/ui/Button';
+import {
+  backendBaseUrl,
+  fetchArtifactStatus,
+  fetchDatasets,
+  fetchHealth,
+  fetchJobs,
+  type ArtifactStatus,
+  type DatasetItem,
+  type JobItem,
+} from '../lib/api';
 
 export default function DemoPage() {
-    const [activeTab, setActiveTab] = useState<'webcam' | 'video'>('webcam');
-    const [style, setStyle] = useState('gBR');
-    const [initError, setInitError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [health, setHealth] = useState('unknown');
+  const [datasets, setDatasets] = useState<DatasetItem[]>([]);
+  const [jobs, setJobs] = useState<JobItem[]>([]);
+  const [artifactStatus, setArtifactStatus] = useState<ArtifactStatus | null>(null);
 
-    // Fake state for webcam demo
-    const webcamRef = useRef<HTMLVideoElement>(null);
-    const [isStreaming, setIsStreaming] = useState(false);
-    const [score, setScore] = useState(0);
-
-    useEffect(() => {
-        // Simulated mock init
-        setInitError('');
-    }, []);
-
-    const handleStartCam = async () => {
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-            if (webcamRef.current) {
-                webcamRef.current.srcObject = stream;
-                setIsStreaming(true);
-            }
-        } catch (err) {
-            console.error(err);
-            setInitError('无法访问摄像头，请检查权限。');
-        }
-    };
-
-    const stopCam = () => {
-        if (webcamRef.current && webcamRef.current.srcObject) {
-            const tracks = (webcamRef.current.srcObject as MediaStream).getTracks();
-            tracks.forEach(t => t.stop());
-            webcamRef.current.srcObject = null;
-        }
-        setIsStreaming(false);
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const [healthResp, datasetsResp, jobsResp, artifactsResp] = await Promise.all([
+        fetchHealth(),
+        fetchDatasets(),
+        fetchJobs(),
+        fetchArtifactStatus(),
+      ]);
+      setHealth(healthResp.status);
+      setDatasets(datasetsResp);
+      setJobs(jobsResp);
+      setArtifactStatus(artifactsResp);
+    } catch (err) {
+      console.error(err);
+      setError('无法连接后端，请先启动 backend_api.py');
+    } finally {
+      setLoading(false);
     }
+  }, []);
 
-    // Generate fake score
-    useEffect(() => {
-        if (!isStreaming) return;
-        const interval = setInterval(() => {
-            setScore(75 + Math.random() * 20); // 75~95
-        }, 1000);
-        return () => clearInterval(interval);
-    }, [isStreaming]);
+  useEffect(() => {
+    void refresh();
+    const timer = window.setInterval(() => {
+      void refresh();
+    }, 10000);
+    return () => window.clearInterval(timer);
+  }, [refresh]);
 
-    return (
-        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            {/* Header Panel */}
-            <div className="glass-card rounded-2xl relative overflow-hidden bg-white/60">
-                <div className="absolute top-0 inset-x-0 h-1 bg-gradient-to-r from-zinc-800 to-zinc-400" />
-                <div className="p-8 pb-10">
-                    <div className="flex items-center gap-4 mb-4">
-                        <div className="bg-zinc-100 p-3 rounded-full text-zinc-900 border border-zinc-200">
-                            <Camera size={28} />
-                        </div>
-                        <div>
-                            <h1 className="text-3xl font-extrabold tracking-tight text-zinc-900 drop-shadow-sm">
-                                单摄像头动作教学平台
-                            </h1>
-                            <p className="text-zinc-500 font-medium mt-1 tracking-wide">
-                                实时采集视觉关键点 · 映射3D骨骼 · AI分析打分及纠错
-                            </p>
-                        </div>
-                    </div>
-                </div>
-            </div>
+  const runningJobs = useMemo(() => jobs.filter((job) => job.status === 'running').length, [jobs]);
+  const queuedJobs = useMemo(() => jobs.filter((job) => job.status === 'queued').length, [jobs]);
 
-            {initError && (
-                <div className="p-4 bg-orange-50 border border-orange-200 rounded-xl text-orange-700 font-medium flex gap-3 items-center">
-                    <AlertCircle size={20} />
-                    <span>{initError}</span>
-                </div>
-            )}
+  const sample2dUrl = artifactStatus ? `${backendBaseUrl}${artifactStatus.sample_2d_url}` : '';
+  const sample3dUrl = artifactStatus ? `${backendBaseUrl}${artifactStatus.sample_3d_url}` : '';
+  const curvesUrl = artifactStatus ? `${backendBaseUrl}${artifactStatus.curves_url}` : '';
 
-            {/* Main Tabs */}
-            <div className="flex items-center gap-2 mb-2 p-1 bg-zinc-200/50 rounded-xl w-fit">
-                <button
-                    onClick={() => setActiveTab('webcam')}
-                    className={`px-5 py-2.5 rounded-lg font-semibold text-sm transition-all duration-200 ${activeTab === 'webcam'
-                            ? 'bg-white text-zinc-900 shadow-sm'
-                            : 'text-zinc-500 hover:text-zinc-700 hover:bg-zinc-200/50'
-                        }`}
-                >
-                    <div className="flex items-center gap-2">
-                        <Video size={16} /> 直播流评估
-                    </div>
-                </button>
-                <button
-                    onClick={() => setActiveTab('video')}
-                    className={`px-5 py-2.5 rounded-lg font-semibold text-sm transition-all duration-200 ${activeTab === 'video'
-                            ? 'bg-white text-zinc-900 shadow-sm'
-                            : 'text-zinc-500 hover:text-zinc-700 hover:bg-zinc-200/50'
-                        }`}
-                >
-                    <div className="flex items-center gap-2">
-                        <Upload size={16} /> 视频上传分析
-                    </div>
-                </button>
-            </div>
-
-            {/* Webcam Tab */}
-            {activeTab === 'webcam' && (
-                <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-                    <div className="xl:col-span-2 space-y-4">
-                        <div className="glass-card bg-white p-6 rounded-2xl border-zinc-200">
-                            <div className="flex justify-between items-end mb-4">
-                                <div>
-                                    <label className="block text-xs font-bold text-zinc-500 uppercase tracking-widest mb-1.5 pl-1">参考舞种</label>
-                                    <select
-                                        value={style}
-                                        onChange={e => setStyle(e.target.value)}
-                                        className="pl-3 pr-10 py-2 bg-zinc-50 border-zinc-200 text-zinc-900 shadow-sm focus:border-zinc-500 focus:ring-zinc-500"
-                                    >
-                                        <option value="gBR">gBR - Breakdance</option>
-                                        <option value="gPO">gPO - Popping</option>
-                                        <option value="gLO">gLO - Locking</option>
-                                    </select>
-                                </div>
-                                <div className="flex gap-2">
-                                    {!isStreaming ? (
-                                        <Button onClick={handleStartCam} variant="default" className="bg-zinc-900 hover:bg-zinc-800">
-                                            开启摄像头
-                                        </Button>
-                                    ) : (
-                                        <Button onClick={stopCam} variant="destructive">
-                                            关闭摄像头
-                                        </Button>
-                                    )}
-                                    <Button variant="outline"><RefreshCw size={16} className="mr-2" /> 重置记录</Button>
-                                </div>
-                            </div>
-
-                            <div className="aspect-video bg-zinc-900 rounded-xl overflow-hidden relative border border-zinc-200 shadow-inner flex items-center justify-center">
-                                <video
-                                    ref={webcamRef}
-                                    autoPlay
-                                    playsInline
-                                    muted
-                                    className={`w-full h-full object-cover ${!isStreaming ? 'hidden' : ''}`}
-                                />
-                                {!isStreaming && (
-                                    <div className="text-zinc-600 flex flex-col items-center">
-                                        <Camera size={48} className="mb-4 opacity-30" />
-                                        <p className="font-medium tracking-wide">摄像头未连接，请点击上方开启</p>
-                                    </div>
-                                )}
-
-                                {/* Simulated overlays */}
-                                {isStreaming && (
-                                    <div className="absolute top-4 left-4 bg-red-500 text-white text-xs font-bold px-2 py-1 rounded-md flex items-center gap-1.5 shadow-lg">
-                                        <div className="w-2 h-2 rounded-full bg-white animate-pulse" /> LIVE
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-                    </div>
-
-                    <div className="space-y-6">
-                        <div className="glass-card bg-white p-6 rounded-2xl border-zinc-200 relative overflow-hidden">
-                            <div className="absolute top-0 right-0 w-32 h-32 bg-zinc-100 rounded-bl-full -z-10" />
-                            <h3 className="text-sm font-bold text-zinc-400 uppercase tracking-wider flex items-center gap-2 mb-6">
-                                <ChartBar size={16} /> 实时评分面板
-                            </h3>
-
-                            <div className="text-center py-6">
-                                <div className="text-6xl font-black text-zinc-900 tracking-tighter tabular-nums drop-shadow-sm">
-                                    {score > 0 ? score.toFixed(1) : '--'}
-                                </div>
-                                <div className="text-zinc-500 font-medium mt-2">总体表现分 (Score)</div>
-                            </div>
-
-                            <div className="space-y-4 mt-4">
-                                <div className="bg-zinc-50 border border-zinc-100 rounded-xl p-4 flex justify-between items-center shadow-sm">
-                                    <span className="text-zinc-500 font-medium text-sm">平均 MPJPE</span>
-                                    <span className="font-bold text-lg text-zinc-800 tabular-nums">12.4 <span className="text-xs text-zinc-400">mm</span></span>
-                                </div>
-                                <div className="bg-zinc-50 border border-zinc-100 rounded-xl p-4 flex justify-between items-center shadow-sm">
-                                    <span className="text-zinc-500 font-medium text-sm">骨骼角度误差</span>
-                                    <span className="font-bold text-lg text-zinc-800 tabular-nums">3.8 <span className="text-xs text-zinc-400">deg</span></span>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div className="glass-card bg-zinc-900 border-zinc-800 text-white p-6 rounded-2xl shadow-xl shadow-zinc-900/20">
-                            <h3 className="text-sm font-bold text-zinc-400 uppercase tracking-wider flex items-center gap-2 mb-4">
-                                <Volume2 size={16} /> 语音提示与纠错
-                            </h3>
-                            <p className="text-zinc-200 font-medium leading-relaxed mt-2 p-1 bg-zinc-800/50 rounded-lg whitespace-pre-line border border-zinc-700/50">
-                                {isStreaming ? (
-                                    "注意你的左臂姿态，稍微放低一点，\n保持右腿膝盖弯曲。"
-                                ) : (
-                                    "等待采集..."
-                                )}
-                            </p>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* Video Upload Tab (mock) */}
-            {activeTab === 'video' && (
-                <div className="glass-card bg-white p-8 rounded-2xl border-zinc-200 text-center py-20 flex flex-col items-center">
-                    <div className="w-20 h-20 bg-zinc-100 text-zinc-300 rounded-full flex items-center justify-center mb-6 border-2 border-dashed border-zinc-300">
-                        <Upload size={32} />
-                    </div>
-                    <h3 className="text-xl font-bold text-zinc-800 mb-2">拖拽或点击上传视频</h3>
-                    <p className="text-zinc-500 font-medium mb-6">支持 MP4, MOV 格式 (最大文件 50MB)</p>
-                    <Button className="bg-zinc-900 hover:bg-zinc-800 rounded-full px-8">选择视频文件</Button>
-                </div>
-            )}
-
+  return (
+    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+      <section className="glass-card rounded-2xl border-zinc-200 bg-white p-8">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-black tracking-tight text-zinc-900">训练工作台</h1>
+            <p className="mt-2 text-zinc-600">当前版本聚焦训练流程与样例骨骼可视化，不包含在线实拍评分流程。</p>
+          </div>
+          <Button variant="outline" onClick={() => void refresh()} disabled={loading} className="gap-2">
+            <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
+            刷新状态
+          </Button>
         </div>
-    );
+      </section>
+
+      {error && (
+        <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700">
+          {error}
+        </div>
+      )}
+
+      <section className="grid grid-cols-1 gap-4 md:grid-cols-4">
+        <div className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm">
+          <div className="flex items-center justify-between text-zinc-500">
+            <span className="text-xs font-bold uppercase tracking-wider">后端状态</span>
+            <Server size={16} />
+          </div>
+          <div className="mt-3 text-2xl font-black text-zinc-900">{health === 'ok' ? '在线' : '离线'}</div>
+        </div>
+
+        <div className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm">
+          <div className="flex items-center justify-between text-zinc-500">
+            <span className="text-xs font-bold uppercase tracking-wider">数据集</span>
+            <Database size={16} />
+          </div>
+          <div className="mt-3 text-2xl font-black text-zinc-900">{datasets.length}</div>
+        </div>
+
+        <div className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm">
+          <div className="flex items-center justify-between text-zinc-500">
+            <span className="text-xs font-bold uppercase tracking-wider">运行中任务</span>
+            <Activity size={16} />
+          </div>
+          <div className="mt-3 text-2xl font-black text-zinc-900">{runningJobs}</div>
+        </div>
+
+        <div className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm">
+          <div className="flex items-center justify-between text-zinc-500">
+            <span className="text-xs font-bold uppercase tracking-wider">排队任务</span>
+            <Activity size={16} />
+          </div>
+          <div className="mt-3 text-2xl font-black text-zinc-900">{queuedJobs}</div>
+        </div>
+      </section>
+
+      <section className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+        <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
+          <h2 className="mb-4 flex items-center gap-2 text-base font-bold text-zinc-800">
+            <ImageIcon size={18} />
+            训练素材样例（2D）
+          </h2>
+          {artifactStatus?.sample_2d_exists ? (
+            <img src={sample2dUrl} alt="训练2D样例" className="w-full rounded-xl border border-zinc-200" />
+          ) : (
+            <div className="flex h-64 items-center justify-center rounded-xl border border-dashed border-zinc-300 bg-zinc-50 text-sm text-zinc-500">
+              还没有样例图。先执行一次训练后会自动生成。
+            </div>
+          )}
+        </div>
+
+        <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
+          <h2 className="mb-4 flex items-center gap-2 text-base font-bold text-zinc-800">
+            <Cuboid size={18} />
+            生成骨骼样例（3D）
+          </h2>
+          {artifactStatus?.sample_3d_exists ? (
+            <iframe
+              title="训练3D样例"
+              src={sample3dUrl}
+              className="h-72 w-full rounded-xl border border-zinc-200 bg-white"
+            />
+          ) : (
+            <div className="flex h-64 items-center justify-center rounded-xl border border-dashed border-zinc-300 bg-zinc-50 text-sm text-zinc-500">
+              还没有3D样例。先执行一次训练后会自动生成。
+            </div>
+          )}
+        </div>
+      </section>
+
+      <section className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <h2 className="text-base font-bold text-zinc-800">训练曲线</h2>
+          <Button
+            variant="outline"
+            className="gap-2"
+            disabled={!artifactStatus?.curves_exists}
+            onClick={() => {
+              if (curvesUrl) {
+                window.open(curvesUrl, '_blank', 'noopener,noreferrer');
+              }
+            }}
+          >
+            打开训练曲线
+          </Button>
+        </div>
+        <p className="text-sm text-zinc-600">
+          训练每个 epoch 会刷新 loss / MPJPE 曲线和样例骨骼预览，文件位于 artifacts/visualizations。
+        </p>
+      </section>
+
+      <section className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
+        <h2 className="mb-4 text-base font-bold text-zinc-800">数据集注册表</h2>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[720px] text-left text-sm">
+            <thead>
+              <tr className="border-b border-zinc-200 text-zinc-500">
+                <th className="py-2 pr-4 font-semibold">ID</th>
+                <th className="py-2 pr-4 font-semibold">名称</th>
+                <th className="py-2 pr-4 font-semibold">模式</th>
+                <th className="py-2 pr-4 font-semibold">阶段</th>
+                <th className="py-2 font-semibold">备注</th>
+              </tr>
+            </thead>
+            <tbody>
+              {datasets.map((dataset) => (
+                <tr key={dataset.id} className="border-b border-zinc-100">
+                  <td className="py-2 pr-4 font-mono text-xs text-zinc-700">{dataset.id}</td>
+                  <td className="py-2 pr-4 text-zinc-800">{dataset.name}</td>
+                  <td className="py-2 pr-4 text-zinc-600">{dataset.mode}</td>
+                  <td className="py-2 pr-4 text-zinc-600">{dataset.stage}</td>
+                  <td className="py-2 text-zinc-500">{dataset.notes}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  );
 }

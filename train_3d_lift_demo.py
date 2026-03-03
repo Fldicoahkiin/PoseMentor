@@ -239,7 +239,11 @@ def main() -> None:
     )
 
     logger = CSVLogger(save_dir=str(artifact_dir / "logs"), name="lift_demo")
-    viz_cb = TrainingVisualizationCallback(output_dir=artifact_dir / "visualizations")
+    viz_cb = TrainingVisualizationCallback(
+        output_dir=artifact_dir / "visualizations",
+        mean_2d=mean_2d,
+        std_2d=std_2d,
+    )
 
     max_epochs = int(train_cfg["epochs"]) if args.epochs <= 0 else args.epochs
 
@@ -270,6 +274,7 @@ def main() -> None:
     np.savez_compressed(norm_file, mean_2d=mean_2d, std_2d=std_2d)
     print(f"[DONE] 归一化参数保存: {norm_file}")
     print(f"[DONE] 训练曲线可视化: {artifact_dir / 'visualizations' / 'training_curves.html'}")
+    print(f"[DONE] 训练样例可视化: {artifact_dir / 'visualizations' / 'samples' / 'sample_3d_latest.html'}")
 
     if args.export_onnx:
         export_model = model_module.model

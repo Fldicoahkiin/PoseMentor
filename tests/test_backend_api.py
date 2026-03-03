@@ -42,3 +42,11 @@ def test_invalid_dataset_is_rejected() -> None:
     response = client.post("/jobs/train", json={"dataset_id": "unknown_dataset"})
     assert response.status_code == 400
     assert "未知 dataset_id" in response.json()["detail"]
+
+
+def test_artifact_status_route() -> None:
+    response = client.get("/artifacts/status")
+    assert response.status_code == 200
+    payload = response.json()
+    assert "curves_exists" in payload
+    assert "sample_2d_url" in payload

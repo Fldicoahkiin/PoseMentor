@@ -5,20 +5,31 @@ import argparse
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from posementor.infra.command_runner import JobRunner
 from posementor.infra.job_store import JobRecord, JobStore
-from posementor.utils.io import load_yaml
+from posementor.utils.io import ensure_dir, load_yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 JOB_ROOT = PROJECT_ROOT / "outputs" / "job_center"
 DATASET_REGISTRY_FILE = PROJECT_ROOT / "configs" / "datasets.yaml"
+ARTIFACT_ROOT = ensure_dir(PROJECT_ROOT / "artifacts")
 
 store = JobStore(root=JOB_ROOT)
 runner = JobRunner(store=store, cwd=PROJECT_ROOT)
 
 app = FastAPI(title="PoseMentor Backend", version="0.1.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+app.mount("/artifacts-files", StaticFiles(directory=ARTIFACT_ROOT), name="artifacts-files")
 
 
 class DataPrepareRequest(BaseModel):
@@ -149,6 +160,26 @@ def list_jobs() -> dict[str, list[dict[str, object]]]:
 @app.get("/api/datasets")
 def list_datasets() -> dict:
     return _read_dataset_registry()
+
+
+@app.get("/artifacts/status")
+@app.get("/api/artifacts/status")
+def artifact_status() -> dict[str, object]:
+    curves_file = ARTIFACT_ROOT / "visualizations" / "training_curves.html"
+    sample2d_file = ARTIFACT_ROOT / "visualizations" / "samples" / "sample_2d_latest.png"
+    sample3d_file = ARTIFACT_ROOT / "visualizations" / "samples" / "sample_3d_latest.html"
+    summary_file = ARTIFACT_ROOT / "visualizations" / "samples" / "sample_summary_latest.txt"
+
+    return {
+        "curves_exists": curves_file.exists(),
+        "curves_url": "/artifacts-files/visualizations/training_curves.html",
+        "sample_2d_exists": sample2d_file.exists(),
+        "sample_2d_url": "/artifacts-files/visualizations/samples/sample_2d_latest.png",
+        "sample_3d_exists": sample3d_file.exists(),
+        "sample_3d_url": "/artifacts-files/visualizations/samples/sample_3d_latest.html",
+        "summary_exists": summary_file.exists(),
+        "summary_url": "/artifacts-files/visualizations/samples/sample_summary_latest.txt",
+    }
 
 
 @app.get("/jobs/{job_id}")

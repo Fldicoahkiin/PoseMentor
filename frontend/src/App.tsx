@@ -1,6 +1,6 @@
 import React from 'react';
 import { BrowserRouter, Routes, Route, Link, useLocation } from 'react-router-dom';
-import { Terminal, LayoutDashboard, Settings, User } from 'lucide-react';
+import { Terminal, LayoutDashboard, UserRoundCog } from 'lucide-react';
 import { cn } from './lib/utils';
 import DemoPage from './pages/DemoPage';
 import AdminPage from './pages/AdminPage';
@@ -9,8 +9,8 @@ function Sidebar() {
   const location = useLocation();
 
   const links = [
-    { name: '在线演示Demo', href: '/', icon: User },
-    { name: '系统管理后台', href: '/admin', icon: LayoutDashboard },
+    { name: '训练工作台', href: '/', icon: UserRoundCog },
+    { name: '任务控制台', href: '/admin', icon: LayoutDashboard },
   ];
 
   return (
@@ -50,8 +50,8 @@ function Sidebar() {
 
       <div className="mt-8 px-2 w-full">
         <div className="glass-card rounded-xl p-4 text-xs text-zinc-500 text-center">
-          AIST++ <br />
-          AI舞蹈矫正平台
+          PoseMentor <br />
+          单摄像头动作教学系统
         </div>
       </div>
     </div>

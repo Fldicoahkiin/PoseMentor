@@ -1,266 +1,320 @@
-import React, { useState } from 'react';
-import { Settings, Server, Activity, ArrowRight, Play, LayoutGrid } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Activity, Database, FileText, Play, RefreshCw, Settings, Wrench } from 'lucide-react';
 import { Button } from '../components/ui/Button';
+import {
+  createDataPrepareJob,
+  createEvaluateJob,
+  createMultiviewJob,
+  createPoseExtractJob,
+  createTrainJob,
+  fetchDatasets,
+  fetchJobLog,
+  fetchJobs,
+  type DatasetItem,
+  type JobItem,
+} from '../lib/api';
+
+type TabKey = 'overview' | 'data' | 'extract' | 'train' | 'multiview' | 'evaluate';
 
 export default function AdminPage() {
-    const [activeTab, setActiveTab] = useState('overview');
+  const [tab, setTab] = useState<TabKey>('overview');
+  const [datasets, setDatasets] = useState<DatasetItem[]>([]);
+  const [jobs, setJobs] = useState<JobItem[]>([]);
+  const [selectedJobId, setSelectedJobId] = useState('');
+  const [jobLog, setJobLog] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
 
-    return (
-        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <div className="glass-card rounded-2xl relative overflow-hidden bg-white/60">
-                <div className="absolute top-0 inset-x-0 h-1 bg-zinc-900" />
-                <div className="p-8 pb-10">
-                    <div className="flex justify-between items-start">
-                        <div>
-                            <h1 className="text-3xl font-extrabold tracking-tight text-zinc-900 flex items-center gap-3 drop-shadow-sm">
-                                <LayoutGrid className="text-zinc-500" size={32} /> 控制台大盘
-                            </h1>
-                            <p className="text-zinc-500 font-medium mt-3 tracking-wide max-w-2xl leading-relaxed">
-                                统一调度系统各个作业管道 (Pipeline) — 包含数据集预处理、多机位格式化、模型训练与全链路离线评估打分。
-                            </p>
-                        </div>
+  const [datasetId, setDatasetId] = useState('aistpp');
 
-                        <div className="bg-white px-5 py-3 rounded-xl border border-zinc-200 shadow-sm flex items-center gap-3">
-                            <div className="relative flex h-3 w-3">
-                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                                <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
-                            </div>
-                            <span className="font-bold text-zinc-700 uppercase tracking-widest text-xs">Engine Online</span>
-                        </div>
-                    </div>
-                </div>
-            </div>
+  const [dataConfig, setDataConfig] = useState('configs/data.yaml');
+  const [downloadVideos, setDownloadVideos] = useState(false);
+  const [videoLimit, setVideoLimit] = useState(80);
+  const [agreeLicense, setAgreeLicense] = useState(false);
 
-            <div className="grid grid-cols-4 gap-4 mb-6">
-                <div className="bg-zinc-50 border border-zinc-200 rounded-xl p-5 hover:border-zinc-300 transition-colors shadow-sm">
-                    <div className="text-zinc-400 uppercase text-xs font-bold tracking-widest mb-2 flex justify-between">
-                        待处理 <Server size={14} />
-                    </div>
-                    <div className="text-3xl font-black text-zinc-800">12</div>
-                </div>
-                <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 shadow-lg shadow-zinc-900/10">
-                    <div className="text-zinc-400 uppercase text-xs font-bold tracking-widest mb-2 flex justify-between">
-                        运行中 <Activity size={14} className="text-sky-400" />
-                    </div>
-                    <div className="text-3xl font-black text-white">3</div>
-                </div>
-                <div className="bg-zinc-50 border border-zinc-200 rounded-xl p-5 hover:border-zinc-300 transition-colors shadow-sm">
-                    <div className="text-zinc-400 uppercase text-xs font-bold tracking-widest mb-2">已成功</div>
-                    <div className="text-3xl font-black text-emerald-600">84</div>
-                </div>
-                <div className="bg-zinc-50 border border-zinc-200 rounded-xl p-5 hover:border-zinc-300 transition-colors shadow-sm">
-                    <div className="text-zinc-400 uppercase text-xs font-bold tracking-widest mb-2">失败</div>
-                    <div className="text-3xl font-black text-rose-600">1</div>
-                </div>
-            </div>
+  const [extractConfig, setExtractConfig] = useState('configs/data.yaml');
+  const [weights, setWeights] = useState('yolo11m-pose.pt');
+  const [extractConf, setExtractConf] = useState(0.35);
+  const [maxVideos, setMaxVideos] = useState(0);
+  const [inputDir, setInputDir] = useState('');
+  const [outDir, setOutDir] = useState('');
+  const [recursive, setRecursive] = useState(false);
 
-            <div className="grid grid-cols-12 gap-6">
-                <div className="col-span-12 xl:col-span-3">
-                    <div className="glass-card bg-white border-zinc-200 rounded-2xl flex flex-col overflow-hidden shadow-sm">
-                        <div className="px-5 py-4 border-b border-zinc-100 font-bold text-zinc-800 bg-zinc-50/50 uppercase tracking-widest text-xs">
-                            管道入口
-                        </div>
+  const [trainConfig, setTrainConfig] = useState('configs/train.yaml');
+  const [yolo2dDir, setYolo2dDir] = useState('');
+  const [gt3dDir, setGt3dDir] = useState('');
+  const [artifactDir, setArtifactDir] = useState('');
+  const [exportOnnx, setExportOnnx] = useState(true);
 
-                        <div className="flex flex-col p-2 gap-1">
-                            {['overview', 'data', 'pose', 'train', 'eval'].map((tab, idx) => {
-                                const names = ['总览信息', '数据下载预处理', '关键点特征提取', '模型训练引擎', '离线全景评估'];
-                                const active = activeTab === tab;
-                                return (
-                                    <button
-                                        key={tab}
-                                        onClick={() => setActiveTab(tab)}
-                                        className={`text-left px-4 py-3 rounded-xl font-semibold text-sm transition-all duration-200 flex justify-between items-center ${active ? 'bg-zinc-900 text-white shadow-md' : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900'
-                                            }`}
-                                    >
-                                        {names[idx]}
-                                        {active && <ArrowRight size={16} className="text-zinc-400" />}
-                                    </button>
-                                )
-                            })}
-                        </div>
-                    </div>
-                </div>
+  const [multiviewConfig, setMultiviewConfig] = useState('configs/multiview.yaml');
+  const [limitSessions, setLimitSessions] = useState(20);
 
-                <div className="col-span-12 xl:col-span-9 glass-card bg-white p-8 rounded-2xl border-zinc-200 min-h-[500px] shadow-sm">
-                    {activeTab === 'overview' && (
-                        <div>
-                            <h3 className="text-xl font-bold text-zinc-900 mb-6 flex items-center gap-3">
-                                <Activity className="text-zinc-400" />
-                                任务执行队列
-                            </h3>
-                            <div className="border border-zinc-200 rounded-xl overflow-hidden bg-zinc-50">
-                                <table className="w-full text-left font-medium">
-                                    <thead className="bg-zinc-100/80 text-zinc-500 text-xs uppercase tracking-widest">
-                                        <tr>
-                                            <th className="px-5 py-4 font-bold">作业 ID</th>
-                                            <th className="px-5 py-4 font-bold">模块类型</th>
-                                            <th className="px-5 py-4 font-bold">状态</th>
-                                            <th className="px-5 py-4 font-bold">耗时</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody className="divide-y divide-zinc-200 text-zinc-700 text-sm bg-white">
-                                        <tr className="hover:bg-zinc-50 transition-colors">
-                                            <td className="px-5 py-4 font-mono text-zinc-500">task_a79f2b</td>
-                                            <td className="px-5 py-4 font-semibold">关键点特征提取</td>
-                                            <td className="px-5 py-4"><span className="bg-sky-100 text-sky-700 px-3 py-1 rounded-full text-xs font-bold tracking-wide">RUNNING</span></td>
-                                            <td className="px-5 py-4 font-mono">1m 24s</td>
-                                        </tr>
-                                        <tr className="hover:bg-zinc-50 transition-colors">
-                                            <td className="px-5 py-4 font-mono text-zinc-500">task_13be4c</td>
-                                            <td className="px-5 py-4 font-semibold">数据下载预处理</td>
-                                            <td className="px-5 py-4"><span className="bg-emerald-100 text-emerald-700 px-3 py-1 rounded-full text-xs font-bold tracking-wide">CLEARED</span></td>
-                                            <td className="px-5 py-4 font-mono">12m 04s</td>
-                                        </tr>
-                                        <tr className="hover:bg-zinc-50 transition-colors">
-                                            <td className="px-5 py-4 font-mono text-zinc-500">task_6bfe90</td>
-                                            <td className="px-5 py-4 font-semibold">模型训练引擎</td>
-                                            <td className="px-5 py-4"><span className="bg-rose-100 text-rose-700 px-3 py-1 rounded-full text-xs font-bold tracking-wide">FAILED</span></td>
-                                            <td className="px-5 py-4 font-mono">2h 14m</td>
-                                        </tr>
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
-                    )}
+  const [evalInputDir, setEvalInputDir] = useState('data/raw/aistpp/videos');
+  const [evalStyle, setEvalStyle] = useState('gBR');
+  const [evalMaxVideos, setEvalMaxVideos] = useState(20);
+  const [evalOutput, setEvalOutput] = useState('outputs/eval/summary.csv');
 
-                    {activeTab === 'data' && (
-                        <div className="max-w-xl">
-                            <h3 className="text-xl font-bold text-zinc-900 mb-6">新建：数据预处理任务</h3>
-                            <form className="space-y-6">
-                                <div>
-                                    <label className="block text-xs font-bold text-zinc-500 uppercase tracking-widest mb-2 pl-1">配置文件路径 (data.yaml)</label>
-                                    <input type="text" defaultValue="configs/data.yaml" className="w-full bg-zinc-50 border-zinc-200 text-zinc-900 shadow-sm rounded-xl px-4 py-2.5 font-mono text-sm" />
-                                </div>
-                                <div className="space-y-3 p-5 bg-zinc-50 rounded-xl border border-zinc-200">
-                                    <label className="flex items-center gap-3 font-medium text-zinc-700 cursor-pointer">
-                                        <input type="checkbox" defaultChecked className="w-5 h-5 rounded text-zinc-900 border-zinc-300 focus:ring-zinc-900 disabled:opacity-50" />
-                                        同意下载相关数据集证书许可协议
-                                    </label>
-                                    <label className="flex items-center gap-3 font-medium text-zinc-700 cursor-pointer">
-                                        <input type="checkbox" defaultChecked className="w-5 h-5 rounded text-zinc-900 border-zinc-300 focus:ring-zinc-900 disabled:opacity-50" />
-                                        提取核心关键帧注释
-                                    </label>
-                                </div>
-                                <Button className="w-full bg-zinc-900 hover:bg-zinc-800 text-white rounded-xl h-12 flex gap-2">
-                                    <Play size={18} fill="currentColor" /> 投递系统执行
-                                </Button>
-                            </form>
-                        </div>
-                    )}
+  const refresh = useCallback(async () => {
+    try {
+      const [datasetsResp, jobsResp] = await Promise.all([fetchDatasets(), fetchJobs()]);
+      setDatasets(datasetsResp);
+      setJobs(jobsResp);
+    } catch (err) {
+      console.error(err);
+      setError('无法连接后端，请先启动 backend_api.py');
+    }
+  }, []);
 
-                    {activeTab === 'pose' && (
-                        <div className="max-w-xl animate-in fade-in zoom-in-95 duration-200">
-                            <h3 className="text-xl font-bold text-zinc-900 mb-6">配置：关键点特征提取 (YOLO11)</h3>
-                            <form className="space-y-6">
-                                <div>
-                                    <label className="block text-xs font-bold text-zinc-500 uppercase tracking-widest mb-2 pl-1">预训练模型权重</label>
-                                    <select className="w-full bg-zinc-50 border-zinc-200 text-zinc-900 shadow-sm rounded-xl px-4 py-3 font-medium text-sm focus:border-zinc-500 focus:ring-zinc-500 transition-all">
-                                        <option value="yolo11l-pose.pt">yolo11l-pose.pt (精确优先 - 推荐)</option>
-                                        <option value="yolo11m-pose.pt">yolo11m-pose.pt (平衡)</option>
-                                        <option value="yolo11n-pose.pt">yolo11n-pose.pt (速度优先)</option>
-                                    </select>
-                                </div>
-                                <div>
-                                    <label className="block text-xs font-bold text-zinc-500 uppercase tracking-widest mb-2 pl-1">推理设备 (Device)</label>
-                                    <div className="flex gap-4">
-                                        <label className="flex-1 flex items-center justify-center gap-2 p-3 border border-zinc-200 rounded-xl cursor-pointer hover:bg-zinc-50 transition-colors">
-                                            <input type="radio" name="device" defaultChecked className="text-zinc-900 focus:ring-zinc-900 w-4 h-4" />
-                                            <span className="font-bold text-zinc-700">MPS / GPU</span>
-                                        </label>
-                                        <label className="flex-1 flex items-center justify-center gap-2 p-3 border border-zinc-200 rounded-xl cursor-pointer hover:bg-zinc-50 transition-colors">
-                                            <input type="radio" name="device" className="text-zinc-900 focus:ring-zinc-900 w-4 h-4" />
-                                            <span className="font-bold text-zinc-700">CPU</span>
-                                        </label>
-                                    </div>
-                                </div>
-                                <Button className="w-full bg-zinc-900 hover:bg-zinc-800 text-white rounded-xl h-12 flex gap-2">
-                                    <Play size={18} fill="currentColor" /> 启动特征提取管线
-                                </Button>
-                            </form>
-                        </div>
-                    )}
+  useEffect(() => {
+    void refresh();
+    const timer = window.setInterval(() => {
+      void refresh();
+    }, 6000);
+    return () => window.clearInterval(timer);
+  }, [refresh]);
 
-                    {activeTab === 'train' && (
-                        <div className="max-w-2xl animate-in fade-in zoom-in-95 duration-200">
-                            <h3 className="text-xl font-bold text-zinc-900 mb-6">配置：3D Lift网络训练</h3>
-                            <form className="space-y-6">
-                                <div className="grid grid-cols-2 gap-6">
-                                    <div>
-                                        <label className="block text-xs font-bold text-zinc-500 uppercase tracking-widest mb-2 pl-1">训练轮次 (Epochs)</label>
-                                        <input type="number" defaultValue="50" className="w-full bg-zinc-50 border-zinc-200 text-zinc-900 shadow-sm rounded-xl px-4 py-2.5 font-mono text-sm" />
-                                    </div>
-                                    <div>
-                                        <label className="block text-xs font-bold text-zinc-500 uppercase tracking-widest mb-2 pl-1">批次大小 (Batch Size)</label>
-                                        <input type="number" defaultValue="128" className="w-full bg-zinc-50 border-zinc-200 text-zinc-900 shadow-sm rounded-xl px-4 py-2.5 font-mono text-sm" />
-                                    </div>
-                                    <div>
-                                        <label className="block text-xs font-bold text-zinc-500 uppercase tracking-widest mb-2 pl-1">学习率 (Learning Rate)</label>
-                                        <input type="text" defaultValue="1e-3" className="w-full bg-zinc-50 border-zinc-200 text-zinc-900 shadow-sm rounded-xl px-4 py-2.5 font-mono text-sm" />
-                                    </div>
-                                    <div>
-                                        <label className="block text-xs font-bold text-zinc-500 uppercase tracking-widest mb-2 pl-1">输入通道维度</label>
-                                        <input type="number" defaultValue="34" disabled className="w-full bg-zinc-100 border-zinc-200 text-zinc-500 shadow-sm rounded-xl px-4 py-2.5 font-mono text-sm cursor-not-allowed" />
-                                    </div>
-                                </div>
+  useEffect(() => {
+    if (!selectedJobId) {
+      setJobLog('');
+      return;
+    }
+    const run = async () => {
+      try {
+        const logText = await fetchJobLog(selectedJobId);
+        setJobLog(logText || '(暂无日志输出)');
+      } catch {
+        setJobLog('日志读取失败');
+      }
+    };
+    void run();
+  }, [selectedJobId]);
 
-                                <div className="p-5 bg-zinc-50 rounded-xl border border-zinc-200 flex items-start gap-3">
-                                    <Settings className="text-zinc-400 shrink-0 mt-0.5" size={20} />
-                                    <div>
-                                        <h4 className="font-bold text-zinc-800 text-sm">增量训练模式</h4>
-                                        <p className="text-zinc-500 text-xs mt-1 leading-relaxed">检测到 outputs/checkpoints 下已有权重，若勾选下方选项，则加载最新检查点继续训练以延长 Epoch，而非从头初始化网络参数。</p>
-                                        <label className="flex items-center gap-3 font-medium text-zinc-700 cursor-pointer mt-3">
-                                            <input type="checkbox" defaultChecked className="w-4 h-4 rounded text-zinc-900 border-zinc-300 focus:ring-zinc-900" />
-                                            从中断点恢复训练 (Resume Training)
-                                        </label>
-                                    </div>
-                                </div>
+  const jobStats = useMemo(() => {
+    const queued = jobs.filter((job) => job.status === 'queued').length;
+    const running = jobs.filter((job) => job.status === 'running').length;
+    const succeeded = jobs.filter((job) => job.status === 'succeeded').length;
+    const failed = jobs.filter((job) => job.status === 'failed').length;
+    return { queued, running, succeeded, failed };
+  }, [jobs]);
 
-                                <Button className="w-full bg-zinc-900 hover:bg-zinc-800 text-white rounded-xl h-12 flex gap-2">
-                                    <Play size={18} fill="currentColor" /> 下发分布式训练任务
-                                </Button>
-                            </form>
-                        </div>
-                    )}
+  const runTask = useCallback(async (runner: () => Promise<string>) => {
+    setBusy(true);
+    setMessage('');
+    setError('');
+    try {
+      const jobId = await runner();
+      setMessage(`任务已提交：${jobId}`);
+      setSelectedJobId(jobId);
+      await refresh();
+    } catch (err: unknown) {
+      console.error(err);
+      const detail =
+        typeof err === 'object' &&
+        err !== null &&
+        'response' in err &&
+        typeof (err as { response?: { data?: { detail?: unknown } } }).response?.data?.detail === 'string'
+          ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+          : undefined;
+      setError(detail || '任务提交失败，请检查参数');
+    } finally {
+      setBusy(false);
+    }
+  }, [refresh]);
 
-                    {activeTab === 'eval' && (
-                        <div className="max-w-xl animate-in fade-in zoom-in-95 duration-200">
-                            <h3 className="text-xl font-bold text-zinc-900 mb-6">全景视图与评估报告</h3>
-
-                            <div className="flex flex-col gap-4">
-                                <div className="border border-zinc-200 rounded-xl p-5 flex justify-between items-center hover:shadow-md transition-shadow bg-white">
-                                    <div className="flex items-center gap-4">
-                                        <div className="w-10 h-10 rounded-full bg-zinc-100 flex items-center justify-center text-zinc-500">
-                                            <Activity size={20} />
-                                        </div>
-                                        <div>
-                                            <div className="font-bold text-zinc-900">执行 DTW 时序对齐精度测试</div>
-                                            <div className="text-xs text-zinc-500 mt-1">遍历测试集输出评价指标矩阵 (MPJPE / PA-MPJPE)</div>
-                                        </div>
-                                    </div>
-                                    <Button variant="outline" className="border-zinc-300 text-zinc-700 font-bold hover:bg-zinc-100">运行</Button>
-                                </div>
-
-                                <div className="border border-zinc-200 rounded-xl p-5 flex justify-between items-center hover:shadow-md transition-shadow bg-white">
-                                    <div className="flex items-center gap-4">
-                                        <div className="w-10 h-10 rounded-full bg-zinc-100 flex items-center justify-center text-zinc-500">
-                                            <ArrowRight size={20} />
-                                        </div>
-                                        <div>
-                                            <div className="font-bold text-zinc-900">导出生产环境 ONNX 模型</div>
-                                            <div className="text-xs text-zinc-500 mt-1">将当前 PyTorch Checkpoint 量化导出给前端推理使用</div>
-                                        </div>
-                                    </div>
-                                    <Button variant="outline" className="border-zinc-300 text-zinc-700 font-bold hover:bg-zinc-100">导出</Button>
-                                </div>
-
-                                <div className="mt-4 p-4 rounded-xl bg-orange-50 border border-orange-200 text-orange-800 text-sm">
-                                    <strong>提示：</strong> 目前在系统中没有找到有效的缓存模型快照，这可能导致在线评分功能短时间内表现欠佳。建议优先执行一次训练全生命周期。
-                                </div>
-                            </div>
-                        </div>
-                    )}
-                </div>
-            </div>
+  return (
+    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+      <section className="rounded-2xl border border-zinc-200 bg-white p-8 shadow-sm">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-black tracking-tight text-zinc-900">任务控制台</h1>
+            <p className="mt-2 text-zinc-600">数据准备、特征提取、训练与评测任务统一在这里下发和跟踪。</p>
+          </div>
+          <Button variant="outline" onClick={() => void refresh()} className="gap-2">
+            <RefreshCw size={16} /> 刷新任务
+          </Button>
         </div>
-    );
+      </section>
+
+      {(message || error) && (
+        <div className={`rounded-xl border px-4 py-3 text-sm font-medium ${error ? 'border-rose-200 bg-rose-50 text-rose-700' : 'border-emerald-200 bg-emerald-50 text-emerald-700'}`}>
+          {error || message}
+        </div>
+      )}
+
+      <section className="grid grid-cols-2 gap-4 md:grid-cols-4">
+        <div className="rounded-xl border border-zinc-200 bg-white p-4"><p className="text-xs text-zinc-500">待处理</p><p className="mt-2 text-2xl font-black text-zinc-900">{jobStats.queued}</p></div>
+        <div className="rounded-xl border border-zinc-200 bg-white p-4"><p className="text-xs text-zinc-500">运行中</p><p className="mt-2 text-2xl font-black text-zinc-900">{jobStats.running}</p></div>
+        <div className="rounded-xl border border-zinc-200 bg-white p-4"><p className="text-xs text-zinc-500">成功</p><p className="mt-2 text-2xl font-black text-zinc-900">{jobStats.succeeded}</p></div>
+        <div className="rounded-xl border border-zinc-200 bg-white p-4"><p className="text-xs text-zinc-500">失败</p><p className="mt-2 text-2xl font-black text-zinc-900">{jobStats.failed}</p></div>
+      </section>
+
+      <section className="grid grid-cols-1 gap-6 xl:grid-cols-4">
+        <div className="rounded-2xl border border-zinc-200 bg-white p-3 shadow-sm">
+          {([
+            ['overview', '任务总览', Activity],
+            ['data', '数据准备', Database],
+            ['extract', '关键点提取', Wrench],
+            ['train', '模型训练', Settings],
+            ['multiview', '多机位处理', Wrench],
+            ['evaluate', '评测导出', FileText],
+          ] as [TabKey, string, React.ComponentType<{ size?: number }>][])
+            .map(([key, label, Icon]) => {
+              const active = tab === key;
+              return (
+                <button
+                  key={key}
+                  onClick={() => setTab(key)}
+                  className={`mb-1 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-semibold transition ${active ? 'bg-zinc-900 text-white' : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900'}`}
+                >
+                  <Icon size={16} /> {label}
+                </button>
+              );
+            })}
+        </div>
+
+        <div className="xl:col-span-3 rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
+          <div className="mb-4">
+            <label className="mb-1 block text-xs font-bold uppercase tracking-wider text-zinc-500">dataset_id</label>
+            <select value={datasetId} onChange={(e) => setDatasetId(e.target.value)} className="w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm">
+              {datasets.map((item) => (
+                <option key={item.id} value={item.id}>{item.id} · {item.name}</option>
+              ))}
+            </select>
+          </div>
+
+          {tab === 'overview' && (
+            <div className="space-y-4">
+              <h3 className="text-lg font-bold text-zinc-900">任务列表</h3>
+              <div className="max-h-72 overflow-auto rounded-xl border border-zinc-200">
+                <table className="w-full text-left text-sm">
+                  <thead className="sticky top-0 bg-zinc-50 text-zinc-500">
+                    <tr>
+                      <th className="px-3 py-2">作业ID</th>
+                      <th className="px-3 py-2">类型</th>
+                      <th className="px-3 py-2">状态</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {jobs.map((job) => (
+                      <tr
+                        key={job.job_id}
+                        className={`cursor-pointer border-t border-zinc-100 ${selectedJobId === job.job_id ? 'bg-zinc-100' : 'hover:bg-zinc-50'}`}
+                        onClick={() => setSelectedJobId(job.job_id)}
+                      >
+                        <td className="px-3 py-2 font-mono text-xs text-zinc-700">{job.job_id}</td>
+                        <td className="px-3 py-2 text-zinc-700">{job.name}</td>
+                        <td className="px-3 py-2 text-zinc-600">{job.status}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div>
+                <h4 className="mb-2 text-sm font-bold text-zinc-800">日志预览</h4>
+                <pre className="h-48 overflow-auto rounded-xl border border-zinc-200 bg-zinc-950 p-3 text-xs leading-5 text-zinc-200">{jobLog || '请选择作业查看日志'}</pre>
+              </div>
+            </div>
+          )}
+
+          {tab === 'data' && (
+            <div className="space-y-4">
+              <h3 className="text-lg font-bold text-zinc-900">数据准备任务</h3>
+              <input value={dataConfig} onChange={(e) => setDataConfig(e.target.value)} className="w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm" />
+              <label className="flex items-center gap-2 text-sm text-zinc-700"><input type="checkbox" checked={downloadVideos} onChange={(e) => setDownloadVideos(e.target.checked)} /> 下载视频</label>
+              <label className="flex items-center gap-2 text-sm text-zinc-700"><input type="checkbox" checked={agreeLicense} onChange={(e) => setAgreeLicense(e.target.checked)} /> 同意数据许可</label>
+              <input type="number" value={videoLimit} onChange={(e) => setVideoLimit(Number(e.target.value))} className="w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm" />
+              <Button disabled={busy} className="h-11 w-full gap-2" onClick={() => void runTask(() => createDataPrepareJob({
+                dataset_id: datasetId,
+                config: dataConfig,
+                download_annotations: true,
+                extract_annotations: true,
+                download_videos: downloadVideos,
+                video_limit: videoLimit,
+                agree_license: agreeLicense,
+                preprocess_limit: 0,
+              }))}><Play size={16} /> 提交数据准备任务</Button>
+            </div>
+          )}
+
+          {tab === 'extract' && (
+            <div className="space-y-4">
+              <h3 className="text-lg font-bold text-zinc-900">关键点提取任务</h3>
+              <input value={extractConfig} onChange={(e) => setExtractConfig(e.target.value)} className="w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm" />
+              <input value={weights} onChange={(e) => setWeights(e.target.value)} className="w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm" />
+              <div className="grid grid-cols-2 gap-3">
+                <input type="number" step="0.01" value={extractConf} onChange={(e) => setExtractConf(Number(e.target.value))} className="rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm" />
+                <input type="number" value={maxVideos} onChange={(e) => setMaxVideos(Number(e.target.value))} className="rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm" />
+              </div>
+              <input value={inputDir} onChange={(e) => setInputDir(e.target.value)} placeholder="可选：输入视频目录" className="w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm" />
+              <input value={outDir} onChange={(e) => setOutDir(e.target.value)} placeholder="可选：输出目录" className="w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm" />
+              <label className="flex items-center gap-2 text-sm text-zinc-700"><input type="checkbox" checked={recursive} onChange={(e) => setRecursive(e.target.checked)} /> 递归扫描目录</label>
+              <Button disabled={busy} className="h-11 w-full gap-2" onClick={() => void runTask(() => createPoseExtractJob({
+                dataset_id: datasetId,
+                config: extractConfig,
+                input_dir: inputDir || undefined,
+                out_dir: outDir || undefined,
+                recursive,
+                video_ext: 'mp4',
+                weights,
+                conf: extractConf,
+                max_videos: maxVideos,
+              }))}><Play size={16} /> 提交提取任务</Button>
+            </div>
+          )}
+
+          {tab === 'train' && (
+            <div className="space-y-4">
+              <h3 className="text-lg font-bold text-zinc-900">模型训练任务</h3>
+              <input value={trainConfig} onChange={(e) => setTrainConfig(e.target.value)} className="w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm" />
+              <input value={yolo2dDir} onChange={(e) => setYolo2dDir(e.target.value)} placeholder="可选：覆盖 yolo2d_dir" className="w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm" />
+              <input value={gt3dDir} onChange={(e) => setGt3dDir(e.target.value)} placeholder="可选：覆盖 gt3d_dir" className="w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm" />
+              <input value={artifactDir} onChange={(e) => setArtifactDir(e.target.value)} placeholder="可选：覆盖 artifact_dir" className="w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm" />
+              <label className="flex items-center gap-2 text-sm text-zinc-700"><input type="checkbox" checked={exportOnnx} onChange={(e) => setExportOnnx(e.target.checked)} /> 同时导出 ONNX</label>
+              <Button disabled={busy} className="h-11 w-full gap-2" onClick={() => void runTask(() => createTrainJob({
+                dataset_id: datasetId,
+                config: trainConfig,
+                yolo2d_dir: yolo2dDir || undefined,
+                gt3d_dir: gt3dDir || undefined,
+                artifact_dir: artifactDir || undefined,
+                export_onnx: exportOnnx,
+              }))}><Play size={16} /> 提交训练任务</Button>
+            </div>
+          )}
+
+          {tab === 'multiview' && (
+            <div className="space-y-4">
+              <h3 className="text-lg font-bold text-zinc-900">多机位处理任务</h3>
+              <input value={multiviewConfig} onChange={(e) => setMultiviewConfig(e.target.value)} className="w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm" />
+              <input type="number" value={limitSessions} onChange={(e) => setLimitSessions(Number(e.target.value))} className="w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm" />
+              <Button disabled={busy} className="h-11 w-full gap-2" onClick={() => void runTask(() => createMultiviewJob({
+                config: multiviewConfig,
+                limit_sessions: limitSessions,
+              }))}><Play size={16} /> 提交多机位任务</Button>
+            </div>
+          )}
+
+          {tab === 'evaluate' && (
+            <div className="space-y-4">
+              <h3 className="text-lg font-bold text-zinc-900">评测任务</h3>
+              <input value={evalInputDir} onChange={(e) => setEvalInputDir(e.target.value)} className="w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm" />
+              <div className="grid grid-cols-2 gap-3">
+                <input value={evalStyle} onChange={(e) => setEvalStyle(e.target.value)} className="rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm" />
+                <input type="number" value={evalMaxVideos} onChange={(e) => setEvalMaxVideos(Number(e.target.value))} className="rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm" />
+              </div>
+              <input value={evalOutput} onChange={(e) => setEvalOutput(e.target.value)} className="w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm" />
+              <Button disabled={busy} className="h-11 w-full gap-2" onClick={() => void runTask(() => createEvaluateJob({
+                dataset_id: datasetId,
+                input_dir: evalInputDir,
+                style: evalStyle,
+                max_videos: evalMaxVideos,
+                output_csv: evalOutput,
+              }))}><Play size={16} /> 提交评测任务</Button>
+            </div>
+          )}
+        </div>
+      </section>
+    </div>
+  );
 }
