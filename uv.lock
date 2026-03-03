@@ -592,6 +592,18 @@ wheels = [
 ]
 
 [[package]]
+name = "honcho"
+version = "2.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "colorama", marker = "sys_platform == 'win32'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/65/c8/d860888358bf5c8a6e7d78d1b508b59b0e255afd5655f243b8f65166dafd/honcho-2.0.0.tar.gz", hash = "sha256:af3815c03c634bf67d50f114253ea9fef72ecff26e4fd06b29234789ac5b8b2e", size = 45618, upload-time = "2024-10-06T14:26:53.871Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/48/1c/25631fc359955569e63f5446dbb7022c320edf9846cbe892ee5113433a7e/honcho-2.0.0-py3-none-any.whl", hash = "sha256:56dcd04fc72d362a4befb9303b1a1a812cba5da283526fbc6509be122918ddf3", size = 22093, upload-time = "2024-10-06T14:26:52.181Z" },
+]
+
+[[package]]
 name = "httpcore"
 version = "1.0.9"
 source = { registry = "https://pypi.org/simple" }
@@ -1423,6 +1435,7 @@ dependencies = [
     { name = "fastdtw" },
     { name = "gradio" },
     { name = "gtts" },
+    { name = "honcho" },
     { name = "lightning" },
     { name = "numpy" },
     { name = "onnx" },
@@ -1435,6 +1448,7 @@ dependencies = [
     { name = "soundfile" },
     { name = "torch" },
     { name = "tqdm" },
+    { name = "typer" },
     { name = "ultralytics" },
     { name = "uvicorn" },
 ]
@@ -1464,6 +1478,7 @@ requires-dist = [
     { name = "fastdtw", specifier = ">=0.3.4" },
     { name = "gradio", specifier = ">=5.20.0" },
     { name = "gtts", specifier = ">=2.5.4" },
+    { name = "honcho", specifier = ">=2.0.0" },
     { name = "lightning", specifier = ">=2.5.0" },
     { name = "numpy", specifier = ">=2.1.0" },
     { name = "onnx", specifier = ">=1.17.0" },
@@ -1476,6 +1491,7 @@ requires-dist = [
     { name = "soundfile", specifier = ">=0.13.1" },
     { name = "torch", specifier = ">=2.4.0" },
     { name = "tqdm", specifier = ">=4.67.0" },
+    { name = "typer", specifier = ">=0.15.0" },
     { name = "ultralytics", specifier = ">=8.3.0" },
     { name = "uvicorn", specifier = ">=0.35.0" },
 ]
