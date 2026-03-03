@@ -77,6 +77,24 @@ class TemplateLibrary:
         return tiled[:min_len]
 
 
+def build_lift_model_from_state(state_dict: dict[str, torch.Tensor]) -> tuple[PoseLiftTransformer, int]:
+    max_seq_len = int(state_dict["time_pos_embed"].shape[1]) if "time_pos_embed" in state_dict else 243
+    hidden_dim = int(state_dict["time_pos_embed"].shape[2]) if "time_pos_embed" in state_dict else 256
+    num_joints = int(state_dict["head.weight"].shape[0] // 3) if "head.weight" in state_dict else 17
+    in_dim = (
+        int(state_dict["input_proj.weight"].shape[1] // max(num_joints, 1))
+        if "input_proj.weight" in state_dict
+        else 2
+    )
+    model = PoseLiftTransformer(
+        num_joints=num_joints,
+        in_dim=in_dim,
+        hidden_dim=hidden_dim,
+        max_seq_len=max_seq_len,
+    )
+    return model, max_seq_len
+
+
 class RealtimeDanceCoach:
     def __init__(self, config: CoachConfig) -> None:
         self.config = config
@@ -106,19 +124,23 @@ class RealtimeDanceCoach:
         ckpt_path: Path,
         norm_file: Path,
     ) -> tuple[PoseLiftTransformer, np.ndarray, np.ndarray]:
-        model = PoseLiftTransformer()
-
         if not ckpt_path.exists():
             raise FileNotFoundError(
                 f"找不到 3D lift 权重: {ckpt_path}，请先运行 train_3d_lift_demo.py"
             )
 
         state = torch.load(ckpt_path, map_location="cpu")
+        cleaned: dict[str, torch.Tensor]
         if isinstance(state, dict) and "state_dict" in state:
             cleaned = {k.replace("model.", "", 1): v for k, v in state["state_dict"].items()}
-            model.load_state_dict(cleaned, strict=False)
         else:
-            model.load_state_dict(state, strict=False)
+            cleaned = state
+
+        model, max_seq_len = build_lift_model_from_state(cleaned)
+        model.load_state_dict(cleaned, strict=False)
+
+        if self.config.seq_len > max_seq_len:
+            self.config.seq_len = max_seq_len
 
         if not norm_file.exists():
             mean = np.zeros((1, 1, 2), dtype=np.float32)
@@ -221,6 +243,7 @@ class RealtimeDanceCoach:
                 "score": 0.0,
                 "mpjpe_mm": 0.0,
                 "angle_error_deg": 0.0,
+                "is_ready": False,
                 "advice": "未检测到人体，请调整镜头。",
                 "bad_joints": [],
                 "plot": build_3d_skeleton_figure(np.zeros((17, 3), dtype=np.float32)),
@@ -246,6 +269,7 @@ class RealtimeDanceCoach:
                 "score": 0.0,
                 "mpjpe_mm": 0.0,
                 "angle_error_deg": 0.0,
+                "is_ready": False,
                 "advice": "正在收集时序信息，请继续动作。",
                 "bad_joints": [],
                 "plot": build_3d_skeleton_figure(np.zeros((17, 3), dtype=np.float32)),
@@ -269,6 +293,7 @@ class RealtimeDanceCoach:
             "score": detail.score,
             "mpjpe_mm": detail.mpjpe_mm,
             "angle_error_deg": detail.angle_error_deg,
+            "is_ready": True,
             "advice": detail.advice_text,
             "bad_joints": bad_joints,
             "plot": build_3d_skeleton_figure(pred3d[-1], ref_last),

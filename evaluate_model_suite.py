@@ -55,8 +55,9 @@ def eval_single_video(coach: RealtimeDanceCoach, video_path: Path, style: str) -
         score = float(result["score"])
         mpjpe = float(result["mpjpe_mm"])
         angle = float(result["angle_error_deg"])
+        is_ready = bool(result.get("is_ready", False))
 
-        if score > 0:
+        if is_ready:
             scores.append(score)
             mpjpe_vals.append(mpjpe)
             angle_vals.append(angle)
