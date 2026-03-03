@@ -13,6 +13,7 @@ import {
   Server,
   TriangleAlert,
 } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { Button } from '../components/ui/Button';
 import {
   fetchArtifactManifest,
@@ -84,6 +85,7 @@ export default function DemoPage() {
   const [visualTab, setVisualTab] = useState<VisualTabKey>('video');
   const [selectedVideoIndex, setSelectedVideoIndex] = useState(0);
   const [summaryText, setSummaryText] = useState('');
+  const [copiedCommand, setCopiedCommand] = useState('');
 
   const refreshCore = useCallback(async () => {
     setLoading(true);
@@ -257,6 +259,28 @@ export default function DemoPage() {
     [artifactManifest],
   );
 
+  const commandQuickList = useMemo(
+    () => [
+      'uv run posementor config',
+      'uv run posementor init',
+      'uv run posementor doctor',
+      'uv run posementor quickstart --epochs 1 --up',
+      './posementor status',
+      './posementor logs --service all --lines 120',
+    ],
+    [],
+  );
+
+  const copyCommand = useCallback(async (command: string) => {
+    try {
+      await navigator.clipboard.writeText(command);
+      setCopiedCommand(command);
+      window.setTimeout(() => setCopiedCommand(''), 1200);
+    } catch {
+      setCopiedCommand('');
+    }
+  }, []);
+
   const sample2dUrl = artifactStatus ? `${backendBaseUrl}${artifactStatus.sample_2d_url}` : '';
   const sample3dUrl = artifactStatus ? `${backendBaseUrl}${artifactStatus.sample_3d_url}` : '';
   const curvesUrl = artifactStatus ? `${backendBaseUrl}${artifactStatus.curves_url}` : '';
@@ -272,10 +296,15 @@ export default function DemoPage() {
               左侧管理素材与标准化流程，右侧查看训练视频、2D/3D骨架和训练产物。
             </p>
           </div>
-          <Button variant="outline" onClick={() => void refreshCore()} disabled={loading} className="gap-2">
-            <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
-            刷新状态
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Link to="/admin">
+              <Button variant="outline">任务控制台</Button>
+            </Link>
+            <Button variant="outline" onClick={() => void refreshCore()} disabled={loading} className="gap-2">
+              <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
+              刷新状态
+            </Button>
+          </div>
         </div>
       </section>
 
@@ -417,6 +446,24 @@ export default function DemoPage() {
           </div>
 
           <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
+            <h2 className="mb-4 text-base font-bold text-zinc-800">常用命令</h2>
+            <div className="space-y-2">
+              {commandQuickList.map((command) => (
+                <button
+                  key={command}
+                  onClick={() => void copyCommand(command)}
+                  className="w-full rounded-lg border border-zinc-200 bg-stone-50 px-3 py-2 text-left text-sm hover:bg-stone-100"
+                >
+                  <p className="font-mono text-xs text-zinc-700">{command}</p>
+                </button>
+              ))}
+            </div>
+            <p className="mt-3 text-xs text-zinc-500">
+              {copiedCommand ? `已复制：${copiedCommand}` : '点击命令可复制到剪贴板'}
+            </p>
+          </div>
+
+          <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
             <h2 className="mb-4 flex items-center gap-2 text-base font-bold text-zinc-800">
               <Boxes size={18} />
               标准化策略
@@ -465,6 +512,9 @@ export default function DemoPage() {
 
             {visualTab === 'video' && (
               <div className="space-y-4">
+                <div className="rounded-lg border border-zinc-200 bg-stone-50 px-3 py-2 text-xs text-zinc-600">
+                  视频根目录：{sourcePreview?.video_root || '未检测到'}
+                </div>
                 {currentVideoUrl ? (
                   <>
                     <video
@@ -550,6 +600,13 @@ export default function DemoPage() {
                   模型产物
                 </h2>
                 <span className="text-xs text-zinc-500">总计 {artifactManifest?.count || 0}</span>
+              </div>
+              <div className="mb-3 flex flex-wrap gap-2">
+                {Object.entries(artifactManifest?.by_kind || {}).map(([kind, count]) => (
+                  <span key={kind} className="rounded-full border border-zinc-200 bg-stone-50 px-2 py-1 text-xs text-zinc-600">
+                    {kind}: {count}
+                  </span>
+                ))}
               </div>
               <div className="space-y-2">
                 {modelFiles.length > 0 ? (
