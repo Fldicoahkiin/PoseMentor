@@ -62,23 +62,17 @@ posementor/
 
 完整步骤见：[`docs/QUICKSTART.md`](docs/QUICKSTART.md)
 
-最短路径（macOS）：
+傻瓜路径（推荐）：
 
 ```bash
-uv sync --group dev --group mac
-uv run python download_and_prepare_aist.py --config configs/data.yaml --download --extract
-uv run python extract_pose_aist2d.py --config configs/data.yaml
-uv run python train_3d_lift_demo.py --config configs/train.yaml --export-onnx --epochs 1
-uv run python backend_api.py
+uv run python scripts/config_setup.py
+uv run posementor init
+uv run posementor quickstart --epochs 1 --export-onnx --up
 ```
 
-新开终端启动前端：
-
-```bash
-cd frontend
-pnpm install
-pnpm dev --host 127.0.0.1 --port 7860
-```
+查看状态与日志：
+- `uv run posementor status`
+- `uv run posementor logs --service all --lines 120`
 
 ## AIST++ 下载链接
 
@@ -175,11 +169,18 @@ uv run python visualize_multiview_report.py --manifest data/processed/multiview/
 
 ## CLI 集成
 
-统一入口脚本：`posementor_cli.py`
+统一入口命令：`posementor`（兼容入口脚本：`posementor_cli.py`）
 
 示例：
 
 ```bash
+uv run posementor config-init --force
+uv run posementor doctor
+uv run posementor up
+uv run posementor status
+uv run posementor logs --service backend_api --lines 80
+uv run posementor down
+
 uv run python posementor_cli.py extract-aist2d --config configs/data.yaml
 uv run python posementor_cli.py train-lift --config configs/train.yaml --epochs 2
 uv run python posementor_cli.py prepare-multiview --config configs/multiview.yaml --limit-sessions 10

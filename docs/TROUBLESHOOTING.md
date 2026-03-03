@@ -135,3 +135,33 @@ ls -la artifacts/visualizations
 ```bash
 curl http://127.0.0.1:8787/datasets
 ```
+
+## 11. CLI 提示本地配置不存在
+
+现象：
+- 运行 `uv run posementor up` 或 `uv run posementor quickstart` 前未初始化配置
+
+修复：
+
+```bash
+uv run posementor config-init
+```
+
+或：
+
+```bash
+uv run python scripts/config_setup.py
+```
+
+## 12. `status` 一直显示 stopped
+
+排查顺序：
+
+```bash
+uv run posementor doctor
+uv run posementor up
+uv run posementor status
+uv run posementor logs --service all --lines 120
+```
+
+如果 `doctor` 显示端口占用，请先释放对应端口或调整 `configs/local.yaml` 端口配置。

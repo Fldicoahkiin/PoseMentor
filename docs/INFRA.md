@@ -10,6 +10,7 @@
 - `scripts/launch_macos.sh` / `scripts/launch_windows.ps1`：本地一键启动脚本
 - `configs/datasets.yaml`：数据集注册表（AIST++ / 自定义数据源扩展位）
 - `configs/standards.yaml`：评分标准库注册表（业务标准动作模板版本）
+- `configs/local.yaml`：本地运行配置（端口、默认数据集、日志目录）
 
 ## 2. 运行拓扑
 
@@ -80,6 +81,15 @@ pnpm dev --host 127.0.0.1 --port 7860
 
 - macOS：`./scripts/launch_macos.sh all`
 - Windows：`powershell -ExecutionPolicy Bypass -File .\scripts\launch_windows.ps1 -Action all`
+
+也可使用 CLI 控制：
+
+- `uv run posementor config-init`
+- `uv run posementor init`
+- `uv run posementor up`
+- `uv run posementor status`
+- `uv run posementor logs --service all --lines 120`
+- `uv run posementor down`
 
 ## 6. Docker 说明
 

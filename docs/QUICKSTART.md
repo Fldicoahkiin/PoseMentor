@@ -1,13 +1,42 @@
 # Quickstart
 
-## 0. 前置依赖
+## 0. 傻瓜模式（推荐）
+
+### macOS
+
+```bash
+cd /Users/mac/WorkSpace/Python_Project/posementor
+uv run python scripts/config_setup.py
+uv run posementor init
+uv run posementor quickstart --epochs 1 --export-onnx --up
+```
+
+### Windows
+
+```powershell
+cd C:\path\to\posementor
+uv run python scripts/config_setup.py
+uv run posementor init
+uv run posementor quickstart --epochs 1 --export-onnx --up
+```
+
+常用管理命令：
+
+```bash
+uv run posementor doctor
+uv run posementor status
+uv run posementor logs --service all --lines 120
+uv run posementor down
+```
+
+## 1. 前置依赖
 
 - Python 3.11
 - [uv](https://docs.astral.sh/uv/)
 - Node.js 20+
 - [pnpm](https://pnpm.io/)
 
-## 1. 安装依赖
+## 2. 安装依赖
 
 ### macOS
 
@@ -30,7 +59,7 @@ cd frontend
 pnpm install
 ```
 
-## 2. 准备 AIST++ 数据
+## 3. 准备 AIST++ 数据
 
 AIST++ 官方文件：
 - [fullset.zip](https://storage.googleapis.com/aist_plusplus_public/20210308/fullset.zip)
@@ -54,7 +83,7 @@ uv run python download_and_prepare_aist.py --config configs/data.yaml --download
 uv run python -c "from pathlib import Path; from posementor.data.aist_loader import find_gt3d_files; print(len(find_gt3d_files(Path('data/raw/aistpp/annotations'))))"
 ```
 
-## 3. 提取 2D 关键点
+## 4. 提取 2D 关键点
 
 ```bash
 uv run python extract_pose_yolo11.py --weights yolo11m-pose.pt --config configs/data.yaml
@@ -66,7 +95,7 @@ uv run python extract_pose_yolo11.py --weights yolo11m-pose.pt --config configs/
 uv run python extract_pose_aist2d.py --config configs/data.yaml
 ```
 
-## 4. 训练 3D Lift
+## 5. 训练 3D Lift
 
 ```bash
 uv run python train_3d_lift_demo.py --config configs/train.yaml --export-onnx
@@ -79,7 +108,7 @@ uv run python train_3d_lift_demo.py --config configs/train.yaml --export-onnx
 - `artifacts/visualizations/training_curves.html`
 - `artifacts/visualizations/training_history.csv`
 
-## 5. 启动服务
+## 6. 启动服务
 
 前后端分离启动：
 - 后端负责数据处理、训练、推理调度
@@ -102,7 +131,7 @@ pnpm dev --host 127.0.0.1 --port 7860
 
 前端地址：`http://127.0.0.1:7860`
 
-## 6. 快速验证
+## 7. 快速验证
 
 健康检查：
 
@@ -118,7 +147,7 @@ curl http://127.0.0.1:8787/datasets
 uv run python inference_pipeline_demo.py --source webcam --show --style gBR
 ```
 
-## 7. 扩展命令
+## 8. 扩展命令
 
 离线评测：
 
@@ -144,15 +173,22 @@ uv run python extract_pose_yolo11.py --config configs/data.yaml --video-root dat
 uv run python visualize_multiview_report.py --manifest data/processed/multiview/multiview_manifest.csv
 ```
 
-## 8. CLI 一体化命令
+## 9. CLI 一体化命令
 
 ```bash
+uv run posementor config-init --force
+uv run posementor init
+uv run posementor quickstart --epochs 1 --export-onnx --up
+uv run posementor status
+uv run posementor logs --service backend_api --lines 120
+uv run posementor down
+
 uv run python posementor_cli.py prepare-aist --config configs/data.yaml --download --extract
 uv run python posementor_cli.py extract-aist2d --config configs/data.yaml
 uv run python posementor_cli.py train-lift --config configs/train.yaml --epochs 2
 ```
 
-## 9. 自定义数据集扩展位（预留）
+## 10. 自定义数据集扩展位（预留）
 
 当前后端通过 `configs/datasets.yaml` 管理数据集注册信息。  
 如果后续加入自采集数据，推荐先走这条方式：
@@ -170,7 +206,7 @@ uv run python train_3d_lift_demo.py \
   --artifact-dir /path/to/custom_artifacts
 ```
 
-## 10. Docker 启动（可选）
+## 11. Docker 启动（可选）
 
 ```bash
 cd docker
