@@ -62,12 +62,28 @@ posementor/
 
 完整步骤见：[`docs/QUICKSTART.md`](docs/QUICKSTART.md)
 
-傻瓜路径（推荐）：
+快速路径（推荐）：
 
 ```bash
 uv run python scripts/config_setup.py
 uv run posementor init
 uv run posementor quickstart --epochs 1 --export-onnx --up
+```
+
+也支持项目内可执行入口（完成 `init` 后）：
+
+```bash
+./posementor config
+./posementor doctor
+./posementor quickstart --epochs 1 --up
+```
+
+Windows 会在 `init` 后生成 `posementor.exe`，可直接：
+
+```powershell
+posementor.exe config
+posementor.exe doctor
+posementor.exe quickstart --epochs 1 --up
 ```
 
 查看状态与日志：
@@ -176,10 +192,14 @@ uv run python visualize_multiview_report.py --manifest data/processed/multiview/
 ```bash
 uv run posementor config --force
 uv run posementor doctor
+uv run posementor install-launchers
 uv run posementor up
 uv run posementor status
 uv run posementor logs --service backend_api --lines 80
 uv run posementor down
+
+./posementor status
+./posementor logs --service all --lines 120
 
 uv run python posementor_cli.py extract-aist2d --config configs/data.yaml
 uv run python posementor_cli.py train-lift --config configs/train.yaml --epochs 2

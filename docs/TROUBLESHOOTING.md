@@ -165,3 +165,17 @@ uv run posementor logs --service all --lines 120
 ```
 
 如果 `doctor` 显示端口占用，请先释放对应端口或调整 `configs/local.yaml` 端口配置。
+
+## 13. `./posementor` 或 `posementor.exe` 不可用
+
+修复：
+
+```bash
+uv run posementor install-launchers
+```
+
+若仍失败，先确认依赖安装完成：
+
+```bash
+uv run posementor init
+```

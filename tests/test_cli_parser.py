@@ -16,3 +16,9 @@ def test_cli_supports_quickstart_up_flag() -> None:
     assert args.command == "quickstart"
     assert args.epochs == 2
     assert args.up is True
+
+
+def test_cli_supports_install_launchers_command() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["install-launchers"])
+    assert args.command == "install-launchers"

@@ -27,6 +27,42 @@ def _run_python_script(script: str, extra_args: list[str]) -> int:
     return result.returncode
 
 
+def _launcher_shell_text() -> str:
+    return """#!/usr/bin/env sh
+set -e
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+
+if [ -x "$SCRIPT_DIR/.venv/bin/posementor" ]; then
+  exec "$SCRIPT_DIR/.venv/bin/posementor" "$@"
+fi
+
+if command -v python3 >/dev/null 2>&1; then
+  exec python3 "$SCRIPT_DIR/posementor_cli.py" "$@"
+fi
+
+exec python "$SCRIPT_DIR/posementor_cli.py" "$@"
+"""
+
+
+def _launcher_cmd_text() -> str:
+    return """@echo off
+set SCRIPT_DIR=%~dp0
+
+if exist "%SCRIPT_DIR%.venv\\Scripts\\posementor.exe" (
+  "%SCRIPT_DIR%.venv\\Scripts\\posementor.exe" %*
+  exit /b %errorlevel%
+)
+
+if exist "%SCRIPT_DIR%.venv\\Scripts\\python.exe" (
+  "%SCRIPT_DIR%.venv\\Scripts\\python.exe" "%SCRIPT_DIR%posementor_cli.py" %*
+  exit /b %errorlevel%
+)
+
+python "%SCRIPT_DIR%posementor_cli.py" %*
+"""
+
+
 def _run_command(command: list[str], cwd: Path | None = None, env: dict[str, str] | None = None) -> int:
     print(f"[CMD] {' '.join(command)}")
     result = subprocess.run(command, cwd=cwd, env=env, check=False)  # noqa: S603
@@ -57,6 +93,32 @@ def _ensure_project_dirs(local_cfg: dict[str, Any]) -> None:
     (PROJECT_ROOT / "artifacts").mkdir(parents=True, exist_ok=True)
     (PROJECT_ROOT / "outputs").mkdir(parents=True, exist_ok=True)
     _runtime_dirs(local_cfg)
+
+
+def _install_local_launchers() -> None:
+    shell_launcher = PROJECT_ROOT / "posementor"
+    shell_launcher.write_text(_launcher_shell_text(), encoding="utf-8")
+    shell_launcher.chmod(shell_launcher.stat().st_mode | 0o111)
+
+    cmd_launcher = PROJECT_ROOT / "posementor.cmd"
+    cmd_launcher.write_text(_launcher_cmd_text(), encoding="utf-8")
+
+    if platform.system() != "Windows":
+        print(f"[OK] 已生成入口: {shell_launcher}")
+        return
+
+    exe_src = PROJECT_ROOT / ".venv" / "Scripts" / "posementor.exe"
+    script_src = PROJECT_ROOT / ".venv" / "Scripts" / "posementor-script.py"
+    exe_dst = PROJECT_ROOT / "posementor.exe"
+    script_dst = PROJECT_ROOT / "posementor-script.py"
+
+    if exe_src.exists():
+        shutil.copy2(exe_src, exe_dst)
+        if script_src.exists():
+            shutil.copy2(script_src, script_dst)
+        print(f"[OK] 已生成入口: {exe_dst}")
+    else:
+        print("[WARN] 未找到 .venv/Scripts/posementor.exe，已生成 posementor.cmd 兼容入口")
 
 
 def _pid_file(pids_dir: Path, service_name: str) -> Path:
@@ -220,6 +282,7 @@ def _doctor(local_cfg: dict[str, Any]) -> int:
         checks.append((f"命令 {cmd}", exists, "已安装" if exists else "缺失"))
 
     checks.append(("本地配置", LOCAL_CONFIG_FILE.exists(), str(LOCAL_CONFIG_FILE)))
+    checks.append(("项目入口", (PROJECT_ROOT / "posementor").exists(), str(PROJECT_ROOT / "posementor")))
 
     network_cfg = local_cfg.get("network", {})
     backend_host = str(network_cfg.get("backend_host", "127.0.0.1"))
@@ -267,6 +330,8 @@ def _doctor(local_cfg: dict[str, Any]) -> int:
         print("- 先安装 Node.js 20+ 和 pnpm，然后重跑 `uv run posementor init`")
     if "本地配置" in failed_items:
         print("- 先执行 `uv run posementor config` 生成本地配置")
+    if "项目入口" in failed_items:
+        print("- 先执行 `uv run posementor install-launchers` 生成 ./posementor 入口")
     if "AIST 注释目录" in failed_items:
         print("- 执行 `uv run posementor quickstart --skip-train` 先准备数据")
     if "YOLO 权重" in failed_items:
@@ -347,6 +412,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_config_show = sub.add_parser("config-show", help="显示当前本地配置")
     p_config_show.add_argument("--config-path", default=str(LOCAL_CONFIG_FILE))
+
+    sub.add_parser("install-launchers", help="生成 ./posementor 与 Windows 入口")
 
     sub.add_parser("doctor", help="检查运行环境和关键依赖")
 
@@ -454,6 +521,10 @@ def main() -> None:
         print(cfg)
         raise SystemExit(0)
 
+    if cmd == "install-launchers":
+        _install_local_launchers()
+        raise SystemExit(0)
+
     if cmd == "doctor":
         raise SystemExit(_doctor(local_cfg))
 
@@ -477,6 +548,8 @@ def main() -> None:
             cwd=PROJECT_ROOT,
             env=env,
         )
+        if code == 0:
+            _install_local_launchers()
         raise SystemExit(code)
 
     if cmd == "up":
@@ -501,10 +574,14 @@ def main() -> None:
     if cmd == "status":
         logs_dir, pids_dir = _runtime_dirs(local_cfg)
         for service_name in [BACKEND_SERVICE, FRONTEND_SERVICE]:
-            pid = _read_pid(_pid_file(pids_dir, service_name))
+            pid_path = _pid_file(pids_dir, service_name)
+            pid = _read_pid(pid_path)
             status = "stopped"
             if pid is not None and _is_pid_running(pid):
                 status = "running"
+            elif pid is not None and pid_path.exists():
+                pid_path.unlink()
+                pid = None
             print(
                 f"{service_name}: {status}"
                 + (f" (pid={pid})" if pid is not None else "")

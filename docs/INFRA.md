@@ -86,10 +86,15 @@ pnpm dev --host 127.0.0.1 --port 7860
 
 - `uv run posementor config`
 - `uv run posementor init`
+- `uv run posementor install-launchers`
 - `uv run posementor up`
 - `uv run posementor status`
 - `uv run posementor logs --service all --lines 120`
 - `uv run posementor down`
+
+可执行入口：
+- macOS/Linux：`./posementor ...`
+- Windows：`posementor.exe ...`（执行 `init` 后自动生成）
 
 ## 6. Docker 说明
 

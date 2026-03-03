@@ -1,6 +1,6 @@
 # Quickstart
 
-## 0. 傻瓜模式（推荐）
+## 0. 快速模式（推荐）
 
 ### macOS
 
@@ -11,6 +11,14 @@ uv run posementor init
 uv run posementor quickstart --epochs 1 --export-onnx --up
 ```
 
+`init` 后可直接：
+
+```bash
+./posementor config
+./posementor doctor
+./posementor quickstart --epochs 1 --up
+```
+
 ### Windows
 
 ```powershell
@@ -18,6 +26,14 @@ cd C:\path\to\posementor
 uv run python scripts/config_setup.py
 uv run posementor init
 uv run posementor quickstart --epochs 1 --export-onnx --up
+```
+
+`init` 后可直接：
+
+```powershell
+posementor.exe config
+posementor.exe doctor
+posementor.exe quickstart --epochs 1 --up
 ```
 
 常用管理命令：
@@ -182,6 +198,9 @@ uv run posementor quickstart --epochs 1 --export-onnx --up
 uv run posementor status
 uv run posementor logs --service backend_api --lines 120
 uv run posementor down
+
+./posementor status
+./posementor logs --service all --lines 120
 
 uv run python posementor_cli.py prepare-aist --config configs/data.yaml --download --extract
 uv run python posementor_cli.py extract-aist2d --config configs/data.yaml
