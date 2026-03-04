@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import numpy as np
 from pathlib import Path
+
+import numpy as np
 
 from posementor.data.aist_dataset import (
     AISTLiftDataset,

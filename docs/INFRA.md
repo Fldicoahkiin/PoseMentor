@@ -40,6 +40,7 @@ flowchart LR
 - `GET /api/artifacts/status`
 - `GET /artifacts/manifest`
 - `GET /api/artifacts/manifest`
+- `POST /datasets/upsert`（本地数据集注册与目录管理）
 
 任务路由：
 - `GET /jobs`

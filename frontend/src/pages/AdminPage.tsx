@@ -10,11 +10,12 @@ import {
   fetchDatasets,
   fetchJobLog,
   fetchJobs,
+  upsertDataset,
   type DatasetItem,
   type JobItem,
 } from '../lib/api';
 
-type TabKey = 'overview' | 'data' | 'extract' | 'train' | 'multiview' | 'evaluate';
+type TabKey = 'overview' | 'datasets' | 'data' | 'extract' | 'train' | 'multiview' | 'evaluate';
 
 export default function AdminPage() {
   const [tab, setTab] = useState<TabKey>('overview');
@@ -27,6 +28,11 @@ export default function AdminPage() {
   const [error, setError] = useState('');
 
   const [datasetId, setDatasetId] = useState('aistpp');
+  const [datasetName, setDatasetName] = useState('');
+  const [datasetStage, setDatasetStage] = useState('planned');
+  const [datasetMode, setDatasetMode] = useState('singleview');
+  const [datasetVideoRoot, setDatasetVideoRoot] = useState('');
+  const [datasetNotes, setDatasetNotes] = useState('');
 
   const [dataConfig, setDataConfig] = useState('configs/data.yaml');
   const [downloadVideos, setDownloadVideos] = useState(false);
@@ -90,6 +96,37 @@ export default function AdminPage() {
     void run();
   }, [selectedJobId]);
 
+  useEffect(() => {
+    if (datasets.length === 0) {
+      return;
+    }
+    if (!datasets.some((item) => item.id === datasetId)) {
+      setDatasetId(datasets[0].id);
+    }
+  }, [datasetId, datasets]);
+
+  useEffect(() => {
+    const selected = datasets.find((item) => item.id === datasetId);
+    if (!selected) {
+      return;
+    }
+    setDatasetName(selected.name || selected.id);
+    setDatasetStage(selected.stage || 'planned');
+    setDatasetMode(selected.mode || 'singleview');
+    setDatasetVideoRoot(selected.video_root || '');
+    setDatasetNotes(selected.notes || '');
+    if (selected.data_config) {
+      setDataConfig(selected.data_config);
+      setExtractConfig(selected.data_config);
+    }
+    if (selected.train_config) {
+      setTrainConfig(selected.train_config);
+    }
+    if (selected.video_root) {
+      setEvalInputDir(selected.video_root);
+    }
+  }, [datasetId, datasets]);
+
   const jobStats = useMemo(() => {
     const queued = jobs.filter((job) => job.status === 'queued').length;
     const running = jobs.filter((job) => job.status === 'running').length;
@@ -122,6 +159,49 @@ export default function AdminPage() {
     }
   }, [refresh]);
 
+  const saveDataset = useCallback(async () => {
+    setBusy(true);
+    setMessage('');
+    setError('');
+    try {
+      const saved = await upsertDataset({
+        id: datasetId,
+        name: datasetName,
+        stage: datasetStage,
+        mode: datasetMode,
+        data_config: dataConfig,
+        train_config: trainConfig,
+        video_root: datasetVideoRoot,
+        notes: datasetNotes,
+      });
+      setDatasetId(saved.id);
+      setMessage(`数据集已保存：${saved.id}`);
+      await refresh();
+    } catch (err: unknown) {
+      console.error(err);
+      const detail =
+        typeof err === 'object' &&
+        err !== null &&
+        'response' in err &&
+        typeof (err as { response?: { data?: { detail?: unknown } } }).response?.data?.detail === 'string'
+          ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+          : undefined;
+      setError(detail || '数据集保存失败');
+    } finally {
+      setBusy(false);
+    }
+  }, [
+    dataConfig,
+    datasetId,
+    datasetMode,
+    datasetName,
+    datasetNotes,
+    datasetStage,
+    datasetVideoRoot,
+    refresh,
+    trainConfig,
+  ]);
+
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
       <section className="rounded-2xl border border-zinc-200 bg-white p-8 shadow-sm">
@@ -153,6 +233,7 @@ export default function AdminPage() {
         <div className="rounded-2xl border border-zinc-200 bg-white p-3 shadow-sm">
           {([
             ['overview', '任务总览', Activity],
+            ['datasets', '数据集管理', Database],
             ['data', '数据准备', Database],
             ['extract', '关键点提取', Wrench],
             ['train', '模型训练', Settings],
@@ -214,6 +295,143 @@ export default function AdminPage() {
               <div>
                 <h4 className="mb-2 text-sm font-bold text-zinc-800">日志预览</h4>
                 <pre className="h-48 overflow-auto rounded-xl border border-zinc-200 bg-zinc-950 p-3 text-xs leading-5 text-zinc-200">{jobLog || '请选择作业查看日志'}</pre>
+              </div>
+            </div>
+          )}
+
+          {tab === 'datasets' && (
+            <div className="space-y-4">
+              <h3 className="text-lg font-bold text-zinc-900">数据集管理（本地）</h3>
+              <p className="text-sm text-zinc-600">
+                所有数据集都从本地目录读取。新增四机位数据时，只需配置一个本地目录即可纳入管理。
+              </p>
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                <div>
+                  <label className="mb-1 block text-xs font-bold uppercase tracking-wider text-zinc-500">
+                    dataset_id
+                  </label>
+                  <input
+                    value={datasetId}
+                    onChange={(e) => setDatasetId(e.target.value)}
+                    className="w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm"
+                    placeholder="例如 custom_multiview_team1"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-bold uppercase tracking-wider text-zinc-500">
+                    名称
+                  </label>
+                  <input
+                    value={datasetName}
+                    onChange={(e) => setDatasetName(e.target.value)}
+                    className="w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-bold uppercase tracking-wider text-zinc-500">
+                    模式
+                  </label>
+                  <select
+                    value={datasetMode}
+                    onChange={(e) => setDatasetMode(e.target.value)}
+                    className="w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm"
+                  >
+                    <option value="singleview">singleview</option>
+                    <option value="multiview">multiview</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-bold uppercase tracking-wider text-zinc-500">
+                    阶段
+                  </label>
+                  <select
+                    value={datasetStage}
+                    onChange={(e) => setDatasetStage(e.target.value)}
+                    className="w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm"
+                  >
+                    <option value="planned">planned</option>
+                    <option value="production">production</option>
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-bold uppercase tracking-wider text-zinc-500">
+                  视频目录（本地路径）
+                </label>
+                <input
+                  value={datasetVideoRoot}
+                  onChange={(e) => setDatasetVideoRoot(e.target.value)}
+                  className="w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm"
+                  placeholder="例如 data/raw/multiview"
+                />
+              </div>
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                <div>
+                  <label className="mb-1 block text-xs font-bold uppercase tracking-wider text-zinc-500">
+                    data_config
+                  </label>
+                  <input
+                    value={dataConfig}
+                    onChange={(e) => setDataConfig(e.target.value)}
+                    className="w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm"
+                    placeholder="例如 configs/data.yaml"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-bold uppercase tracking-wider text-zinc-500">
+                    train_config
+                  </label>
+                  <input
+                    value={trainConfig}
+                    onChange={(e) => setTrainConfig(e.target.value)}
+                    className="w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm"
+                    placeholder="例如 configs/train.yaml"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-bold uppercase tracking-wider text-zinc-500">
+                  备注
+                </label>
+                <textarea
+                  value={datasetNotes}
+                  onChange={(e) => setDatasetNotes(e.target.value)}
+                  className="h-20 w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm"
+                />
+              </div>
+              <Button disabled={busy} className="h-11 w-full gap-2" onClick={() => void saveDataset()}>
+                <Database size={16} /> 保存数据集配置
+              </Button>
+
+              <div className="rounded-xl border border-zinc-200">
+                <div className="grid grid-cols-[1.2fr_0.7fr_1fr_0.7fr] gap-2 border-b border-zinc-200 bg-zinc-50 px-3 py-2 text-xs font-bold uppercase tracking-wider text-zinc-500">
+                  <span>dataset</span>
+                  <span>mode</span>
+                  <span>video_root</span>
+                  <span>状态</span>
+                </div>
+                <div className="max-h-52 overflow-auto">
+                  {datasets.map((item) => (
+                    <button
+                      key={item.id}
+                      onClick={() => setDatasetId(item.id)}
+                      className={`grid w-full grid-cols-[1.2fr_0.7fr_1fr_0.7fr] gap-2 border-b border-zinc-100 px-3 py-2 text-left text-sm ${
+                        datasetId === item.id ? 'bg-zinc-100' : 'hover:bg-zinc-50'
+                      }`}
+                    >
+                      <span className="truncate font-semibold text-zinc-800">{item.id}</span>
+                      <span className="truncate text-zinc-600">{item.mode}</span>
+                      <span className="truncate text-zinc-600">{item.video_root || '-'}</span>
+                      <span
+                        className={`font-semibold ${
+                          item.video_root_exists ? 'text-emerald-700' : 'text-amber-700'
+                        }`}
+                      >
+                        {item.video_root_exists ? '就绪' : '缺失'}
+                      </span>
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
           )}

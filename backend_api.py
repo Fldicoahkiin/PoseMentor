@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import argparse
+import re
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,7 +14,7 @@ from pydantic import BaseModel
 
 from posementor.infra.command_runner import JobRunner
 from posementor.infra.job_store import JobRecord, JobStore
-from posementor.utils.io import ensure_dir, load_yaml
+from posementor.utils.io import ensure_dir, load_yaml, save_yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 JOB_ROOT = PROJECT_ROOT / "outputs" / "job_center"
@@ -81,6 +83,20 @@ class EvaluateRequest(BaseModel):
     output_csv: str = "outputs/eval/summary.csv"
 
 
+class DatasetUpsertRequest(BaseModel):
+    id: str
+    name: str
+    stage: str = "planned"
+    mode: str = "singleview"
+    data_config: str = ""
+    train_config: str = ""
+    video_root: str = ""
+    notes: str = ""
+
+
+DATASET_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{2,64}$")
+
+
 def _read_dataset_registry() -> dict:
     if not DATASET_REGISTRY_FILE.exists():
         return {"datasets": []}
@@ -113,8 +129,69 @@ def _find_dataset(dataset_id: str) -> dict | None:
     return None
 
 
-def _assert_dataset_exists(dataset_id: str) -> None:
+def _normalize_dataset_item(item: dict[str, Any]) -> dict[str, str]:
+    return {
+        "id": str(item.get("id", "")).strip(),
+        "name": str(item.get("name", "")).strip(),
+        "stage": str(item.get("stage", "planned")).strip() or "planned",
+        "mode": str(item.get("mode", "singleview")).strip() or "singleview",
+        "data_config": str(item.get("data_config", "")).strip(),
+        "train_config": str(item.get("train_config", "")).strip(),
+        "video_root": str(item.get("video_root", "")).strip(),
+        "notes": str(item.get("notes", "")).strip(),
+    }
+
+
+def _guess_dataset_video_root(dataset_id: str, mode: str) -> Path:
+    if dataset_id == "aistpp":
+        return PROJECT_ROOT / "data" / "raw" / "aistpp" / "videos"
+    if mode == "multiview":
+        return PROJECT_ROOT / "data" / "raw" / "multiview"
+    return PROJECT_ROOT / "data" / "raw" / dataset_id / "videos"
+
+
+def _resolve_dataset_video_root(dataset: dict[str, str]) -> Path:
+    video_root = dataset.get("video_root", "").strip()
+    if video_root:
+        candidate = Path(video_root)
+        if not candidate.is_absolute():
+            candidate = PROJECT_ROOT / candidate
+        return candidate
+
+    data_config = dataset.get("data_config", "").strip()
+    if data_config:
+        from_cfg = _resolve_video_root_from_data_config(PROJECT_ROOT / data_config)
+        if from_cfg is not None:
+            return from_cfg
+
+    return _guess_dataset_video_root(dataset_id=dataset["id"], mode=dataset["mode"])
+
+
+def _enrich_dataset_item(raw_item: dict[str, Any]) -> dict[str, Any]:
+    item = _normalize_dataset_item(raw_item)
+    if not item["id"]:
+        return item
+
+    root = _resolve_dataset_video_root(item)
+    item["video_root"] = _to_project_relative(root)
+    item["video_root_exists"] = root.exists()
+    return item
+
+
+def _dataset_registry_payload() -> dict[str, list[dict[str, Any]]]:
     registry = _read_dataset_registry()
+    rows: list[dict[str, Any]] = []
+    for item in registry["datasets"]:
+        if not isinstance(item, dict):
+            continue
+        normalized = _enrich_dataset_item(item)
+        if normalized.get("id"):
+            rows.append(normalized)
+    return {"datasets": rows}
+
+
+def _assert_dataset_exists(dataset_id: str) -> None:
+    registry = _dataset_registry_payload()
     ids = {str(item.get("id")) for item in registry["datasets"] if isinstance(item, dict)}
     if dataset_id not in ids:
         raise HTTPException(status_code=400, detail=f"未知 dataset_id: {dataset_id}")
@@ -124,7 +201,10 @@ def _assert_aist_dataset(dataset_id: str) -> None:
     if dataset_id != "aistpp":
         raise HTTPException(
             status_code=400,
-            detail=f"dataset_id={dataset_id} 目前仅支持通用提取/训练接口，数据准备任务暂只支持 aistpp",
+            detail=(
+                f"dataset_id={dataset_id} 目前仅支持通用提取/训练接口，"
+                "数据准备任务暂只支持 aistpp"
+            ),
         )
 
 
@@ -215,7 +295,7 @@ def list_jobs() -> dict[str, list[dict[str, object]]]:
 @app.get("/datasets")
 @app.get("/api/datasets")
 def list_datasets() -> dict:
-    return _read_dataset_registry()
+    return _dataset_registry_payload()
 
 
 @app.get("/standards")
@@ -231,16 +311,12 @@ def source_preview(dataset_id: str = "aistpp", limit: int = 3) -> dict[str, obje
     bounded_limit = max(1, min(limit, 20))
 
     dataset = _find_dataset(dataset_id)
-    data_config = str(dataset.get("data_config", "")).strip() if dataset else ""
-    video_root: Path | None = None
-
-    if data_config:
-        video_root = _resolve_video_root_from_data_config(PROJECT_ROOT / data_config)
-    if video_root is None and dataset_id == "aistpp":
-        video_root = PROJECT_ROOT / "data" / "raw" / "aistpp" / "videos"
+    if not isinstance(dataset, dict):
+        raise HTTPException(status_code=404, detail=f"dataset_id={dataset_id} 未注册")
+    video_root = _resolve_dataset_video_root(_normalize_dataset_item(dataset))
 
     samples: list[dict[str, object]] = []
-    if video_root and video_root.exists():
+    if video_root.exists():
         candidates = sorted(video_root.rglob("*.mp4"))
         for path in candidates[:bounded_limit]:
             rel_project = _to_project_relative(path)
@@ -260,9 +336,39 @@ def source_preview(dataset_id: str = "aistpp", limit: int = 3) -> dict[str, obje
 
     return {
         "dataset_id": dataset_id,
-        "video_root": _to_project_relative(video_root) if video_root else "",
+        "video_root": _to_project_relative(video_root),
         "samples": samples,
     }
+
+
+@app.post("/datasets/upsert")
+@app.post("/api/datasets/upsert")
+def upsert_dataset(req: DatasetUpsertRequest) -> dict[str, object]:
+    normalized = _normalize_dataset_item(req.model_dump())
+    if not DATASET_ID_PATTERN.fullmatch(normalized["id"]):
+        raise HTTPException(
+            status_code=400,
+            detail="dataset_id 仅允许字母、数字、下划线和短横线，长度 2-64",
+        )
+    if normalized["mode"] not in {"singleview", "multiview"}:
+        raise HTTPException(status_code=400, detail="mode 仅支持 singleview 或 multiview")
+    if not normalized["name"]:
+        normalized["name"] = normalized["id"]
+
+    registry = _read_dataset_registry()
+    rows = [item for item in registry.get("datasets", []) if isinstance(item, dict)]
+
+    found = False
+    for idx, item in enumerate(rows):
+        if str(item.get("id", "")).strip() == normalized["id"]:
+            rows[idx] = normalized
+            found = True
+            break
+    if not found:
+        rows.append(normalized)
+
+    save_yaml(DATASET_REGISTRY_FILE, {"datasets": rows})
+    return {"ok": True, "dataset": _enrich_dataset_item(normalized)}
 
 
 @app.get("/artifacts/status")
@@ -274,7 +380,9 @@ def artifact_status() -> dict[str, object]:
     sample_video_file = ARTIFACT_ROOT / "visualizations" / "samples" / "sample_video_latest.mp4"
     sample2d_video_file = ARTIFACT_ROOT / "visualizations" / "samples" / "sample_2d_latest.mp4"
     sample3d_video_file = ARTIFACT_ROOT / "visualizations" / "samples" / "sample_3d_latest.mp4"
-    sample_sync_meta_file = ARTIFACT_ROOT / "visualizations" / "samples" / "sample_sync_meta_latest.json"
+    sample_sync_meta_file = (
+        ARTIFACT_ROOT / "visualizations" / "samples" / "sample_sync_meta_latest.json"
+    )
     summary_file = ARTIFACT_ROOT / "visualizations" / "samples" / "sample_summary_latest.txt"
 
     return {
@@ -291,7 +399,9 @@ def artifact_status() -> dict[str, object]:
         "sample_3d_video_exists": sample3d_video_file.exists(),
         "sample_3d_video_url": "/artifacts-files/visualizations/samples/sample_3d_latest.mp4",
         "sample_sync_meta_exists": sample_sync_meta_file.exists(),
-        "sample_sync_meta_url": "/artifacts-files/visualizations/samples/sample_sync_meta_latest.json",
+        "sample_sync_meta_url": (
+            "/artifacts-files/visualizations/samples/sample_sync_meta_latest.json"
+        ),
         "summary_exists": summary_file.exists(),
         "summary_url": "/artifacts-files/visualizations/samples/sample_summary_latest.txt",
     }

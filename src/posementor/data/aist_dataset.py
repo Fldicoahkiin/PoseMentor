@@ -29,7 +29,11 @@ def _read_npz_string(data: np.lib.npyio.NpzFile, key: str) -> str | None:
     return str(raw.reshape(-1)[0])
 
 
-def _resolve_video_candidate(videos_root: Path, seq_id: str, k_data: np.lib.npyio.NpzFile) -> Path | None:
+def _resolve_video_candidate(
+    videos_root: Path,
+    seq_id: str,
+    k_data: np.lib.npyio.NpzFile,
+) -> Path | None:
     source_video_name = _read_npz_string(k_data, "source_video_name")
     if source_video_name:
         direct = videos_root / source_video_name
@@ -140,7 +144,11 @@ def load_sequence_pairs(
                 style = "unknown"
             video_path: Path | None = None
             if videos_root is not None:
-                video_path = _resolve_video_candidate(videos_root=videos_root, seq_id=seq_id, k_data=k_data)
+                video_path = _resolve_video_candidate(
+                    videos_root=videos_root,
+                    seq_id=seq_id,
+                    k_data=k_data,
+                )
         with np.load(gt_files[seq_id]) as g_data:
             gt3d = g_data["joints3d"].astype(np.float32)
 

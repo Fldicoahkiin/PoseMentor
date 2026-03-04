@@ -29,6 +29,7 @@ import {
 } from '../lib/api';
 
 type StepStatus = 'ready' | 'running' | 'waiting' | 'error';
+type SourcePanelMode = 'sync' | 'preview';
 
 function formatBytes(sizeBytes: number): string {
   if (sizeBytes < 1024) {
@@ -96,6 +97,7 @@ export default function DemoPage() {
   const [syncDuration, setSyncDuration] = useState(0);
   const [syncPlaying, setSyncPlaying] = useState(false);
   const [syncPlaybackRate, setSyncPlaybackRate] = useState(1);
+  const [sourcePanelMode, setSourcePanelMode] = useState<SourcePanelMode>('sync');
   const syncDurationsRef = useRef<{ source: number; pose2d: number; pose3d: number }>({
     source: 0,
     pose2d: 0,
@@ -157,7 +159,12 @@ export default function DemoPage() {
   }, [refreshCore]);
 
   useEffect(() => {
-    if (!selectedDatasetId && datasets.length > 0) {
+    if (datasets.length === 0) {
+      setSelectedDatasetId('');
+      return;
+    }
+    const exists = datasets.some((item) => item.id === selectedDatasetId);
+    if (!exists) {
       setSelectedDatasetId(datasets[0].id);
     }
   }, [datasets, selectedDatasetId]);
@@ -293,8 +300,12 @@ export default function DemoPage() {
   const sample3dUrl = artifactStatus?.sample_3d_exists ? `${backendBaseUrl}${artifactStatus.sample_3d_url}` : '';
   const curvesUrl = artifactStatus?.curves_exists ? `${backendBaseUrl}${artifactStatus.curves_url}` : '';
   const currentVideoUrl = currentVideo?.url ? `${backendBaseUrl}${currentVideo.url}` : '';
-  const syncSourceVideoUrl = sampleVideoUrl || currentVideoUrl;
-  const syncReady = Boolean(syncSourceVideoUrl && sample2dVideoUrl && sample3dVideoUrl);
+  const canSyncWithArtifacts = Boolean(sampleVideoUrl && sample2dVideoUrl && sample3dVideoUrl);
+  const syncSourceVideoUrl =
+    sourcePanelMode === 'sync'
+      ? sampleVideoUrl || currentVideoUrl
+      : currentVideoUrl;
+  const syncReady = sourcePanelMode === 'sync' && canSyncWithArtifacts;
   const getSyncVideos = useCallback(
     () => [sourceVideoRef.current, pose2dVideoRef.current, pose3dVideoRef.current].filter(Boolean) as HTMLVideoElement[],
     [],
@@ -307,6 +318,10 @@ export default function DemoPage() {
         return;
       }
       const sourceTime = source.currentTime;
+      if (!syncReady) {
+        setSyncCurrentTime(sourceTime);
+        return;
+      }
       const tolerance = force ? 0.01 : 0.08;
       [pose2dVideoRef.current, pose3dVideoRef.current].forEach((element) => {
         if (!element) {
@@ -324,7 +339,7 @@ export default function DemoPage() {
       });
       setSyncCurrentTime(sourceTime);
     },
-    [],
+    [syncReady],
   );
 
   const syncSeekAll = useCallback((timeSeconds: number) => {
@@ -427,11 +442,25 @@ export default function DemoPage() {
   }, [syncFromSource, syncPlaying]);
 
   useEffect(() => {
+    if (sourcePanelMode === 'sync' && !canSyncWithArtifacts) {
+      setSourcePanelMode('preview');
+    }
+  }, [canSyncWithArtifacts, sourcePanelMode]);
+
+  useEffect(() => {
     setSyncCurrentTime(0);
     setSyncDuration(0);
     setSyncPlaying(false);
     syncDurationsRef.current = { source: 0, pose2d: 0, pose3d: 0 };
-  }, [syncSourceVideoUrl, sample2dVideoUrl, sample3dVideoUrl]);
+  }, [syncSourceVideoUrl, sample2dVideoUrl, sample3dVideoUrl, sourcePanelMode]);
+
+  useEffect(() => {
+    if (selectedDatasetId === 'aistpp' && canSyncWithArtifacts) {
+      setSourcePanelMode('sync');
+      return;
+    }
+    setSourcePanelMode('preview');
+  }, [selectedDatasetId, canSyncWithArtifacts]);
 
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -602,13 +631,29 @@ export default function DemoPage() {
                   视频根目录：{sourcePreview?.video_root || '未检测到'}
                 </span>
                 <span className="rounded-md border border-zinc-200 bg-stone-50 px-2 py-1">
-                  {syncReady ? '同步模式：已就绪' : '同步模式：等待训练同步视频'}
+                  {syncReady ? '同步模式：已就绪' : '同步模式：素材预览'}
                 </span>
               </div>
             </div>
 
             <div className="mb-4 rounded-xl border border-zinc-200 bg-stone-50 px-4 py-3">
               <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  size="sm"
+                  variant={sourcePanelMode === 'sync' ? 'default' : 'outline'}
+                  disabled={!canSyncWithArtifacts}
+                  onClick={() => setSourcePanelMode('sync')}
+                >
+                  训练同步片段
+                </Button>
+                <Button
+                  size="sm"
+                  variant={sourcePanelMode === 'preview' ? 'default' : 'outline'}
+                  disabled={!currentVideoUrl}
+                  onClick={() => setSourcePanelMode('preview')}
+                >
+                  素材预览片段
+                </Button>
                 <Button size="sm" onClick={() => void handleSyncPlay()} disabled={!syncReady} className="h-9">
                   播放
                 </Button>
@@ -649,6 +694,7 @@ export default function DemoPage() {
                 <h3 className="mb-2 text-sm font-bold text-zinc-800">素材视频</h3>
                 {syncSourceVideoUrl ? (
                   <video
+                    key={`source-${syncSourceVideoUrl || 'empty'}`}
                     ref={sourceVideoRef}
                     controls
                     preload="metadata"
@@ -679,7 +725,10 @@ export default function DemoPage() {
                   {(sourcePreview?.samples || []).slice(0, 6).map((sample, index) => (
                     <button
                       key={sample.path}
-                      onClick={() => setSelectedVideoIndex(index)}
+                      onClick={() => {
+                        setSelectedVideoIndex(index);
+                        setSourcePanelMode('preview');
+                      }}
                       className={`rounded-lg border px-3 py-2 text-left text-xs ${
                         selectedVideoIndex === index
                           ? 'border-zinc-900 bg-zinc-900 text-white'
@@ -699,6 +748,7 @@ export default function DemoPage() {
                 <h3 className="mb-2 text-sm font-bold text-zinc-800">2D骨架</h3>
                 {sample2dVideoUrl ? (
                   <video
+                    key={`pose2d-${sample2dVideoUrl || 'empty'}`}
                     ref={pose2dVideoRef}
                     controls={false}
                     preload="metadata"
@@ -722,6 +772,7 @@ export default function DemoPage() {
                 <h3 className="mb-2 text-sm font-bold text-zinc-800">3D骨架</h3>
                 {sample3dVideoUrl ? (
                   <video
+                    key={`pose3d-${sample3dVideoUrl || 'empty'}`}
                     ref={pose3dVideoRef}
                     controls={false}
                     preload="metadata"

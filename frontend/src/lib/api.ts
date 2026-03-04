@@ -7,6 +7,8 @@ export type DatasetItem = {
   mode: string;
   data_config: string;
   train_config: string;
+  video_root: string;
+  video_root_exists: boolean;
   notes: string;
 };
 
@@ -94,6 +96,20 @@ export async function fetchHealth() {
 export async function fetchDatasets() {
   const { data } = await client.get<{ datasets: DatasetItem[] }>("/datasets");
   return data.datasets;
+}
+
+export async function upsertDataset(payload: {
+  id: string;
+  name: string;
+  stage: string;
+  mode: string;
+  data_config: string;
+  train_config: string;
+  video_root: string;
+  notes: string;
+}) {
+  const { data } = await client.post<{ ok: boolean; dataset: DatasetItem }>("/datasets/upsert", payload);
+  return data.dataset;
 }
 
 export async function fetchStandards() {

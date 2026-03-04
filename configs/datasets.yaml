@@ -5,6 +5,7 @@ datasets:
     mode: "singleview"
     data_config: "configs/data.yaml"
     train_config: "configs/train.yaml"
+    video_root: "data/raw/aistpp/videos"
     notes: "默认数据源，已接入完整预处理与训练链路。"
 
   - id: custom_singleview
@@ -13,7 +14,8 @@ datasets:
     mode: "singleview"
     data_config: ""
     train_config: ""
-    notes: "预留自定义单视角数据集位，后续可在前后端直接选择。"
+    video_root: "data/raw/custom_singleview/videos"
+    notes: "自定义单视角数据集位；将素材放入该目录即可在前端本地管理。"
 
   - id: custom_multiview
     name: "Custom Multiview"
@@ -21,5 +23,5 @@ datasets:
     mode: "multiview"
     data_config: "configs/multiview.yaml"
     train_config: ""
-    notes: "预留四机位扩展位，对齐与YOLO提取链路已可复用。"
-
+    video_root: "data/raw/multiview"
+    notes: "自定义四机位数据集位；后续可在该目录接入前后左右机位素材。"

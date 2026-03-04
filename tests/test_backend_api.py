@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
-from backend_api import app
+import backend_api
 
-
-client = TestClient(app)
+client = TestClient(backend_api.app)
 
 
 def test_root_route_returns_service_info() -> None:
@@ -36,6 +37,8 @@ def test_datasets_route_returns_registry() -> None:
     payload = response.json()
     assert isinstance(payload.get("datasets"), list)
     assert any(item.get("id") == "aistpp" for item in payload["datasets"])
+    assert all("video_root" in item for item in payload["datasets"])
+    assert all("video_root_exists" in item for item in payload["datasets"])
 
 
 def test_standards_route_returns_registry() -> None:
@@ -78,3 +81,41 @@ def test_workspace_source_preview_route() -> None:
     payload = response.json()
     assert payload["dataset_id"] == "aistpp"
     assert "samples" in payload
+
+
+def test_upsert_dataset_updates_registry(monkeypatch, tmp_path: Path) -> None:
+    registry = tmp_path / "datasets.yaml"
+    registry.write_text(
+        "datasets:\n"
+        "  - id: aistpp\n"
+        "    name: AIST++\n"
+        "    stage: production\n"
+        "    mode: singleview\n"
+        "    data_config: configs/data.yaml\n"
+        "    train_config: configs/train.yaml\n"
+        "    video_root: data/raw/aistpp/videos\n"
+        "    notes: default\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(backend_api, "DATASET_REGISTRY_FILE", registry)
+
+    payload = {
+        "id": "custom_mv_team",
+        "name": "Custom MV Team",
+        "stage": "planned",
+        "mode": "multiview",
+        "data_config": "configs/multiview.yaml",
+        "train_config": "",
+        "video_root": "data/raw/multiview",
+        "notes": "team dataset",
+    }
+    response = client.post("/datasets/upsert", json=payload)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["dataset"]["id"] == "custom_mv_team"
+
+    response = client.get("/datasets")
+    assert response.status_code == 200
+    datasets = response.json()["datasets"]
+    assert any(item["id"] == "custom_mv_team" for item in datasets)
