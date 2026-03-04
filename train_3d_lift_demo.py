@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import platform
 from pathlib import Path
 
 import lightning as L
@@ -211,19 +212,27 @@ def main() -> None:
         std_2d=std_2d,
     )
 
+    is_macos = platform.system() == "Darwin"
+    has_mps = hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+
     num_workers = int(train_cfg["num_workers"]) if args.num_workers < 0 else args.num_workers
+    if is_macos:
+        num_workers = min(num_workers, 2)
     pin_memory = torch.cuda.is_available()
+    batch_size = int(train_cfg["batch_size"])
+    if is_macos and has_mps:
+        batch_size = min(batch_size, 8)
 
     train_loader = DataLoader(
         train_ds,
-        batch_size=int(train_cfg["batch_size"]),
+        batch_size=batch_size,
         num_workers=num_workers,
         shuffle=True,
         pin_memory=pin_memory,
     )
     val_loader = DataLoader(
         val_ds,
-        batch_size=int(train_cfg["batch_size"]),
+        batch_size=batch_size,
         num_workers=num_workers,
         shuffle=False,
         pin_memory=pin_memory,
@@ -256,12 +265,22 @@ def main() -> None:
     )
 
     max_epochs = int(train_cfg["epochs"]) if args.epochs <= 0 else args.epochs
+    trainer_accelerator = train_cfg.get("accelerator", "auto")
+    trainer_precision = train_cfg.get("precision", "16-mixed")
+    if is_macos and has_mps and trainer_precision == "16-mixed":
+        trainer_precision = "32-true"
+
+    print(
+        "[INFO] 训练参数:"
+        f" batch_size={batch_size} num_workers={num_workers}"
+        f" accelerator={trainer_accelerator} precision={trainer_precision}"
+    )
 
     trainer = L.Trainer(
         max_epochs=max_epochs,
-        accelerator=train_cfg.get("accelerator", "auto"),
+        accelerator=trainer_accelerator,
         devices=train_cfg.get("devices", "auto"),
-        precision=train_cfg.get("precision", "16-mixed"),
+        precision=trainer_precision,
         log_every_n_steps=10,
         callbacks=[ckpt_cb, LearningRateMonitor(logging_interval="epoch"), viz_cb],
         logger=logger,
