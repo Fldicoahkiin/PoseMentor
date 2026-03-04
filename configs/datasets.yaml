@@ -8,17 +8,8 @@ datasets:
     video_root: "data/raw/aistpp/videos"
     notes: "默认数据源，已接入完整预处理与训练链路。"
 
-  - id: custom_singleview
-    name: "Custom Singleview"
-    stage: "planned"
-    mode: "singleview"
-    data_config: ""
-    train_config: ""
-    video_root: "data/raw/custom_singleview/videos"
-    notes: "自定义单视角数据集位；将素材放入该目录即可在前端本地管理。"
-
   - id: custom_multiview
-    name: "Custom Multiview"
+    name: "Custom FourView"
     stage: "planned"
     mode: "multiview"
     data_config: "configs/multiview.yaml"

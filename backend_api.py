@@ -104,6 +104,7 @@ class DatasetUpsertRequest(BaseModel):
 
 
 DATASET_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{2,64}$")
+CAMERA_TOKEN_PATTERN = re.compile(r"_c\d+_")
 
 
 def _read_dataset_registry() -> dict:
@@ -366,6 +367,11 @@ def _to_project_relative(path: Path) -> str:
     return str(path)
 
 
+def _video_group_key(path: Path) -> str:
+    stem = path.stem
+    return CAMERA_TOKEN_PATTERN.sub("_cAll_", stem)
+
+
 @app.get("/")
 def root() -> dict[str, str]:
     return {
@@ -429,21 +435,32 @@ def source_preview(dataset_id: str = "aistpp", limit: int = 3) -> dict[str, obje
     samples: list[dict[str, object]] = []
     if video_root.exists():
         candidates = sorted(video_root.rglob("*.mp4"))
-        for path in candidates[:bounded_limit]:
-            rel_project = _to_project_relative(path)
-            stat = path.stat()
-            url = ""
-            if path.is_relative_to(DATA_ROOT):
-                rel_data = path.relative_to(DATA_ROOT).as_posix()
-                url = f"/data-files/{rel_data}"
-            samples.append(
-                {
-                    "name": path.name,
-                    "path": rel_project,
-                    "url": url,
-                    "size_bytes": stat.st_size,
-                }
-            )
+        grouped: dict[str, list[Path]] = {}
+        for path in candidates:
+            key = _video_group_key(path)
+            grouped.setdefault(key, []).append(path)
+
+        selected_keys = sorted(grouped.keys())[:bounded_limit]
+        for group_key in selected_keys:
+            for path in sorted(grouped[group_key]):
+                camera_match = re.search(r"_c(\d+)_", path.stem)
+                camera_id = f"c{camera_match.group(1)}" if camera_match else ""
+                rel_project = _to_project_relative(path)
+                stat = path.stat()
+                url = ""
+                if path.is_relative_to(DATA_ROOT):
+                    rel_data = path.relative_to(DATA_ROOT).as_posix()
+                    url = f"/data-files/{rel_data}"
+                samples.append(
+                    {
+                        "name": path.name,
+                        "path": rel_project,
+                        "url": url,
+                        "size_bytes": stat.st_size,
+                        "group_key": group_key,
+                        "camera_id": camera_id,
+                    }
+                )
 
     return {
         "dataset_id": dataset_id,
@@ -501,6 +518,12 @@ def workspace_pose_preview(dataset_id: str, video_path: str) -> dict[str, object
 
     with np.load(yolo_file) as yolo_data:
         keypoints2d = yolo_data["keypoints2d"].astype(np.float32)
+        fps_value = 0.0
+        if "fps" in yolo_data.files:
+            try:
+                fps_value = float(np.asarray(yolo_data["fps"]).reshape(-1)[0])
+            except Exception:
+                fps_value = 0.0
     with np.load(gt_file) as gt_data:
         joints3d = gt_data["joints3d"].astype(np.float32)
 
@@ -514,7 +537,10 @@ def workspace_pose_preview(dataset_id: str, video_path: str) -> dict[str, object
         output_mtime = min(output_2d.stat().st_mtime, output_3d.stat().st_mtime)
         need_render = output_mtime < dep_mtime
 
-    stats: dict[str, float] = {"fps": 0.0, "frames": 0.0}
+    stats: dict[str, float] = {
+        "fps": max(0.0, fps_value),
+        "frames": float(min(len(keypoints2d), len(joints3d))),
+    }
     if need_render:
         stats = render_pose_preview_videos(
             source_video=source_video,

@@ -84,6 +84,41 @@ def test_workspace_source_preview_route() -> None:
     assert "samples" in payload
 
 
+def test_workspace_source_preview_groups_multiview_samples(monkeypatch, tmp_path: Path) -> None:
+    project_root = tmp_path / "workspace"
+    data_root = project_root / "data"
+    video_root = data_root / "raw" / "aistpp" / "videos"
+    video_root.mkdir(parents=True, exist_ok=True)
+    for camera in ["c01", "c02", "c03"]:
+        (video_root / f"gBR_sBM_{camera}_d04_mBR0_ch01.mp4").write_bytes(b"fake-mp4")
+
+    monkeypatch.setattr(backend_api, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(backend_api, "DATA_ROOT", data_root)
+    monkeypatch.setattr(backend_api, "_assert_dataset_exists", lambda _: None)
+    monkeypatch.setattr(
+        backend_api,
+        "_find_dataset",
+        lambda _: {
+            "id": "aistpp",
+            "name": "AIST++",
+            "stage": "production",
+            "mode": "singleview",
+            "data_config": "",
+            "train_config": "",
+            "video_root": "data/raw/aistpp/videos",
+            "notes": "",
+        },
+    )
+
+    response = client.get("/workspace/source-preview", params={"dataset_id": "aistpp", "limit": 1})
+    assert response.status_code == 200
+    payload = response.json()
+    samples = payload["samples"]
+    assert len(samples) == 3
+    assert {item["camera_id"] for item in samples} == {"c01", "c02", "c03"}
+    assert len({item["group_key"] for item in samples}) == 1
+
+
 def test_workspace_pose_preview_route(monkeypatch, tmp_path: Path) -> None:
     project_root = tmp_path / "workspace"
     data_root = project_root / "data"
