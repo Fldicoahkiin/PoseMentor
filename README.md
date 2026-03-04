@@ -105,8 +105,10 @@ uv run python download_and_prepare_aist.py --config configs/data.yaml --download
 快速构建训练用 2D（无需先跑 YOLO）：
 
 ```bash
-uv run python extract_pose_aist2d.py --config configs/data.yaml
+uv run python extract_pose_aist2d.py --config configs/data.yaml --camera-index 1
 ```
+
+说明：AIST++ 官方 2D 注释为 9 机位聚合（`cAll`），当前单视角训练链路会为每个样本选取一个机位并输出一个 2D 序列。`--camera-index 1` 固定为 `c01`。
 
 可用数据集清单（后端注册表）：
 

@@ -69,6 +69,9 @@ flowchart LR
 
 1. 使用官方 2D 标注快速构建训练输入  
    脚本：`extract_pose_aist2d.py`
+   - AIST++ `keypoints2d` 是 9 机位聚合格式（`cAll`）
+   - 训练链路使用单视角输入，默认每条序列选取一个机位
+   - 可用 `--camera-index 1` 固定机位，保证全量数据视角一致
 
 2. 从视频跑 YOLO11-Pose 提取 2D  
    脚本：`extract_pose_yolo11.py`

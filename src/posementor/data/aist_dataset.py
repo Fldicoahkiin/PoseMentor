@@ -18,6 +18,42 @@ class SequencePair:
     video_path: Path | None = None
 
 
+def _read_npz_string(data: np.lib.npyio.NpzFile, key: str) -> str | None:
+    if key not in data.files:
+        return None
+    raw = np.asarray(data[key])
+    if raw.ndim == 0:
+        return str(raw.item())
+    if raw.size == 0:
+        return None
+    return str(raw.reshape(-1)[0])
+
+
+def _resolve_video_candidate(videos_root: Path, seq_id: str, k_data: np.lib.npyio.NpzFile) -> Path | None:
+    source_video_name = _read_npz_string(k_data, "source_video_name")
+    if source_video_name:
+        direct = videos_root / source_video_name
+        if direct.exists():
+            return direct
+
+    camera_id = _read_npz_string(k_data, "camera_id")
+    if camera_id and "_cAll_" in seq_id:
+        replaced = videos_root / f"{seq_id.replace('_cAll_', f'_{camera_id}_')}.mp4"
+        if replaced.exists():
+            return replaced
+
+    default = videos_root / f"{seq_id}.mp4"
+    if default.exists():
+        return default
+
+    if "_cAll_" in seq_id:
+        for camera_idx in range(1, 10):
+            candidate = videos_root / f"{seq_id.replace('_cAll_', f'_c{camera_idx:02d}_')}.mp4"
+            if candidate.exists():
+                return candidate
+    return None
+
+
 class AISTLiftDataset(Dataset[dict[str, object]]):
     def __init__(
         self,
@@ -102,14 +138,11 @@ def load_sequence_pairs(
                 style = str(style_val.item() if np.ndim(style_val) == 0 else style_val)
             else:
                 style = "unknown"
+            video_path: Path | None = None
+            if videos_root is not None:
+                video_path = _resolve_video_candidate(videos_root=videos_root, seq_id=seq_id, k_data=k_data)
         with np.load(gt_files[seq_id]) as g_data:
             gt3d = g_data["joints3d"].astype(np.float32)
-
-        video_path: Path | None = None
-        if videos_root is not None:
-            candidate = videos_root / f"{seq_id}.mp4"
-            if candidate.exists():
-                video_path = candidate
 
         frames = min(len(kp2d), len(gt3d))
         if frames < 24:

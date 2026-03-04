@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 import numpy as np
+from pathlib import Path
 
-from posementor.data.aist_dataset import AISTLiftDataset, SequencePair, compute_2d_norm_stats
+from posementor.data.aist_dataset import (
+    AISTLiftDataset,
+    SequencePair,
+    _resolve_video_candidate,
+    compute_2d_norm_stats,
+)
 
 
 def test_compute_2d_norm_stats_handles_nan() -> None:
@@ -44,3 +50,47 @@ def test_dataset_masks_invalid_3d_points() -> None:
     assert (sample["conf"].numpy() >= 0.0).all()
     assert (sample["conf"].numpy() <= 1.0).all()
 
+
+def test_resolve_video_candidate_prefers_source_video_name(tmp_path: Path) -> None:
+    videos_root = tmp_path / "videos"
+    videos_root.mkdir(parents=True, exist_ok=True)
+    explicit_video = videos_root / "explicit.mp4"
+    explicit_video.write_bytes(b"demo")
+    fallback_video = videos_root / "gBR_sBM_c01_d04_mBR0_ch01.mp4"
+    fallback_video.write_bytes(b"demo")
+
+    npz_path = tmp_path / "sample.npz"
+    np.savez_compressed(
+        npz_path,
+        keypoints2d=np.zeros((10, 17, 3), dtype=np.float32),
+        source_video_name=np.array("explicit.mp4"),
+        camera_id=np.array("c01"),
+    )
+    with np.load(npz_path) as data:
+        resolved = _resolve_video_candidate(
+            videos_root=videos_root,
+            seq_id="gBR_sBM_cAll_d04_mBR0_ch01",
+            k_data=data,
+        )
+    assert resolved == explicit_video
+
+
+def test_resolve_video_candidate_supports_call_replacement(tmp_path: Path) -> None:
+    videos_root = tmp_path / "videos"
+    videos_root.mkdir(parents=True, exist_ok=True)
+    replaced_video = videos_root / "gBR_sBM_c03_d04_mBR0_ch01.mp4"
+    replaced_video.write_bytes(b"demo")
+
+    npz_path = tmp_path / "sample.npz"
+    np.savez_compressed(
+        npz_path,
+        keypoints2d=np.zeros((10, 17, 3), dtype=np.float32),
+        camera_id=np.array("c03"),
+    )
+    with np.load(npz_path) as data:
+        resolved = _resolve_video_candidate(
+            videos_root=videos_root,
+            seq_id="gBR_sBM_cAll_d04_mBR0_ch01",
+            k_data=data,
+        )
+    assert resolved == replaced_video

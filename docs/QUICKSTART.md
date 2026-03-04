@@ -108,8 +108,13 @@ uv run python extract_pose_yolo11.py --weights yolo11m-pose.pt --config configs/
 若当前阶段优先验证训练链路，可直接使用 AIST++ 官方 2D 注释：
 
 ```bash
-uv run python extract_pose_aist2d.py --config configs/data.yaml
+uv run python extract_pose_aist2d.py --config configs/data.yaml --camera-index 1
 ```
+
+说明：
+- AIST++ 官方 2D 注释是 9 机位（`c01`~`c09`）打包在同一个 `cAll` 文件。
+- 当前训练链路按“单视角输入”使用，因此每个动作样本会固定选取一个机位，输出一个 2D 序列。
+- `--camera-index 1` 表示固定使用 `c01`；不传时默认按检测稳定性自动选机位。
 
 ## 5. 训练 3D Lift
 
