@@ -28,3 +28,13 @@ def test_cli_supports_cleanup_command() -> None:
     parser = build_parser()
     args = parser.parse_args(["cleanup"])
     assert args.command == "cleanup"
+
+
+def test_cli_supports_start_stop_restart_commands() -> None:
+    parser = build_parser()
+    start_args = parser.parse_args(["start"])
+    stop_args = parser.parse_args(["stop"])
+    restart_args = parser.parse_args(["restart"])
+    assert start_args.command == "start"
+    assert stop_args.command == "stop"
+    assert restart_args.command == "restart"

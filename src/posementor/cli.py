@@ -563,6 +563,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("up", help="启动前后端服务")
     sub.add_parser("down", help="停止前后端服务")
+    sub.add_parser("start", help="启动前后端服务（up 别名）")
+    sub.add_parser("stop", help="停止前后端服务（down 别名）")
+    sub.add_parser("restart", help="重启前后端服务")
     sub.add_parser("status", help="查看服务状态")
     sub.add_parser("cleanup", help="清理历史前端进程和僵尸 PID 记录")
 
@@ -693,7 +696,7 @@ def main() -> None:
             _install_local_launchers()
         raise SystemExit(code)
 
-    if cmd == "up":
+    if cmd in {"up", "start"}:
         for service_name in [BACKEND_SERVICE, FRONTEND_SERVICE]:
             code = _start_service(local_cfg, service_name)
             if code != 0:
@@ -708,9 +711,27 @@ def main() -> None:
         )
         raise SystemExit(0)
 
-    if cmd == "down":
+    if cmd in {"down", "stop"}:
         codes = [_stop_service(local_cfg, BACKEND_SERVICE), _stop_service(local_cfg, FRONTEND_SERVICE)]
         raise SystemExit(max(codes))
+
+    if cmd == "restart":
+        stop_codes = [_stop_service(local_cfg, BACKEND_SERVICE), _stop_service(local_cfg, FRONTEND_SERVICE)]
+        if max(stop_codes) not in {0, 1}:
+            raise SystemExit(max(stop_codes))
+        for service_name in [BACKEND_SERVICE, FRONTEND_SERVICE]:
+            code = _start_service(local_cfg, service_name)
+            if code != 0:
+                raise SystemExit(code)
+        network_cfg = local_cfg.get("network", {})
+        print(
+            "[DONE] 服务地址："
+            f" backend=http://{network_cfg.get('backend_host', '127.0.0.1')}:"
+            f"{network_cfg.get('backend_port', 8787)} "
+            f"frontend=http://{network_cfg.get('frontend_host', '127.0.0.1')}:"
+            f"{network_cfg.get('frontend_port', 7860)}"
+        )
+        raise SystemExit(0)
 
     if cmd == "status":
         logs_dir, pids_dir = _runtime_dirs(local_cfg)

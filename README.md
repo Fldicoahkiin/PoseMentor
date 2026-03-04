@@ -201,10 +201,16 @@ uv run posementor status
 uv run posementor cleanup
 uv run posementor logs --service backend_api --lines 80
 uv run posementor down
+uv run posementor start
+uv run posementor stop
+uv run posementor restart
 
 ./posementor status
 ./posementor cleanup
 ./posementor logs --service all --lines 120
+./posementor start
+./posementor stop
+./posementor restart
 
 uv run python posementor_cli.py extract-aist2d --config configs/data.yaml
 uv run python posementor_cli.py train-lift --config configs/train.yaml --epochs 2

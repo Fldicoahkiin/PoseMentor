@@ -159,6 +159,15 @@ uv run posementor cleanup
 - `artifacts/visualizations/samples/sample_2d_latest.mp4`
 - `artifacts/visualizations/samples/sample_3d_latest.mp4`
 
+常用服务命令：
+
+```bash
+./posementor start
+./posementor status
+./posementor stop
+./posementor restart
+```
+
 ## 7. 快速验证
 
 健康检查：
