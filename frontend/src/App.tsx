@@ -1,6 +1,6 @@
 import React from 'react';
 import { BrowserRouter, Routes, Route, Link, useLocation } from 'react-router-dom';
-import { Terminal, LayoutDashboard, UserRoundCog } from 'lucide-react';
+import { LayoutDashboard, UserRoundCog } from 'lucide-react';
 import { cn } from './lib/utils';
 import DemoPage from './pages/DemoPage';
 import AdminPage from './pages/AdminPage';
@@ -16,8 +16,8 @@ function Sidebar() {
   return (
     <div className="w-64 h-screen border-r bg-zinc-50 border-zinc-200 flex flex-col items-start px-4 py-8 overflow-y-auto shrink-0 select-none">
       <div className="flex items-center gap-3 px-2 mb-10 w-full">
-        <div className="w-8 h-8 rounded-lg bg-zinc-900 text-white flex items-center justify-center">
-          <Terminal size={18} strokeWidth={2.5} />
+        <div className="w-8 h-8 rounded-lg overflow-hidden border border-zinc-700 bg-zinc-900 flex items-center justify-center">
+          <img src="/posementor-favicon.svg" alt="PoseMentor" className="h-8 w-8 object-cover" />
         </div>
         <span className="font-bold text-lg tracking-tight">PoseMentor</span>
       </div>
