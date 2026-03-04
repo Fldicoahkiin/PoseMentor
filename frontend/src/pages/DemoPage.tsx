@@ -12,11 +12,13 @@ import {
 import { Link } from 'react-router-dom';
 import { Button } from '../components/ui/Button';
 import {
+  createTrainJob,
   fetchArtifactManifest,
   backendBaseUrl,
   fetchArtifactStatus,
   fetchDatasets,
   fetchHealth,
+  fetchJobProgress,
   fetchJobs,
   fetchSourcePreview,
   fetchStandards,
@@ -98,6 +100,11 @@ export default function DemoPage() {
   const [syncPlaying, setSyncPlaying] = useState(false);
   const [syncPlaybackRate, setSyncPlaybackRate] = useState(1);
   const [sourcePanelMode, setSourcePanelMode] = useState<SourcePanelMode>('sync');
+  const [trainSubmitting, setTrainSubmitting] = useState(false);
+  const [followTraining, setFollowTraining] = useState(false);
+  const [followTrainJobId, setFollowTrainJobId] = useState('');
+  const [followProgress, setFollowProgress] = useState(0);
+  const [trainHint, setTrainHint] = useState('');
   const syncDurationsRef = useRef<{ source: number; pose2d: number; pose3d: number }>({
     source: 0,
     pose2d: 0,
@@ -217,8 +224,12 @@ export default function DemoPage() {
   );
 
   const orderedJobs = useMemo(
-    () => [...jobs].sort((left, right) => right.created_at.localeCompare(left.created_at)),
+    () => [...jobs].sort((left, right) => Number(right.created_at) - Number(left.created_at)),
     [jobs],
+  );
+  const latestTrainJob = useMemo(
+    () => orderedJobs.find((item) => item.name.includes(`train_3d_lift_${selectedDatasetId}`)) ?? null,
+    [orderedJobs, selectedDatasetId],
   );
 
   const latestJobByKeyword = useCallback(
@@ -462,6 +473,128 @@ export default function DemoPage() {
     setSourcePanelMode('preview');
   }, [selectedDatasetId, canSyncWithArtifacts]);
 
+  useEffect(() => {
+    if (!followTraining) {
+      return;
+    }
+    if (latestTrainJob) {
+      setFollowTrainJobId(latestTrainJob.job_id);
+    }
+  }, [followTraining, latestTrainJob]);
+
+  useEffect(() => {
+    if (!followTraining || !followTrainJobId) {
+      return undefined;
+    }
+
+    let cancelled = false;
+    const readProgress = async () => {
+      try {
+        const progress = await fetchJobProgress(followTrainJobId);
+        if (cancelled) {
+          return;
+        }
+        setFollowProgress(Number.isFinite(progress.progress) ? progress.progress : 0);
+        if (progress.events.length > 0) {
+          setTrainHint(progress.events[progress.events.length - 1]);
+        }
+      } catch {
+        // ignore transient read errors
+      }
+    };
+
+    void readProgress();
+    const timer = window.setInterval(() => {
+      void readProgress();
+    }, 1500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [followTraining, followTrainJobId, jobs]);
+
+  useEffect(() => {
+    if (!followTraining || !followTrainJobId) {
+      return;
+    }
+    const currentJob = jobs.find((item) => item.job_id === followTrainJobId);
+    if (!currentJob) {
+      return;
+    }
+    if (currentJob.status === 'failed') {
+      setFollowTraining(false);
+      setTrainHint(`训练失败：${followTrainJobId}`);
+      return;
+    }
+
+    if (sourcePanelMode !== 'sync' && canSyncWithArtifacts) {
+      setSourcePanelMode('sync');
+    }
+    if (!canSyncWithArtifacts) {
+      return;
+    }
+
+    const duration =
+      syncDuration > 0
+        ? syncDuration
+        : Number.isFinite(sourceVideoRef.current?.duration)
+          ? sourceVideoRef.current?.duration || 0
+          : 0;
+    if (duration > 0) {
+      syncSeekAll(duration * followProgress);
+    }
+
+    if (syncReady && !syncPlaying && (currentJob.status === 'running' || currentJob.status === 'queued')) {
+      void handleSyncPlay();
+    }
+    if (currentJob.status === 'succeeded') {
+      setFollowProgress(1);
+      setFollowTraining(false);
+      setTrainHint(`训练完成：${followTrainJobId}`);
+      if (duration > 0) {
+        syncSeekAll(duration);
+      }
+    }
+  }, [
+    canSyncWithArtifacts,
+    followProgress,
+    followTrainJobId,
+    followTraining,
+    handleSyncPlay,
+    jobs,
+    sourcePanelMode,
+    syncDuration,
+    syncPlaying,
+    syncReady,
+    syncSeekAll,
+  ]);
+
+  const handleStartTraining = useCallback(async () => {
+    if (!selectedDatasetId) {
+      return;
+    }
+    const trainConfigPath = selectedDataset?.train_config?.trim() || 'configs/train.yaml';
+    setTrainSubmitting(true);
+    setTrainHint('');
+    try {
+      const jobId = await createTrainJob({
+        dataset_id: selectedDatasetId,
+        config: trainConfigPath,
+        export_onnx: true,
+      });
+      setFollowTraining(true);
+      setFollowTrainJobId(jobId);
+      setFollowProgress(0);
+      setTrainHint(`训练任务已启动：${jobId}`);
+      setSourcePanelMode('sync');
+      await refreshCore();
+    } catch {
+      setTrainHint('训练任务启动失败，请检查数据路径与配置。');
+    } finally {
+      setTrainSubmitting(false);
+    }
+  }, [refreshCore, selectedDataset?.train_config, selectedDatasetId]);
+
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
       <section className="rounded-2xl border border-zinc-200 bg-white p-8 shadow-sm">
@@ -473,6 +606,10 @@ export default function DemoPage() {
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
+            <Button onClick={() => void handleStartTraining()} disabled={trainSubmitting || !selectedDatasetId} className="gap-2">
+              <LoaderCircle size={16} className={trainSubmitting ? 'animate-spin' : ''} />
+              开始训练
+            </Button>
             <Link to="/admin">
               <Button variant="outline">任务控制台</Button>
             </Link>
@@ -483,6 +620,12 @@ export default function DemoPage() {
           </div>
         </div>
       </section>
+
+      {trainHint && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-800">
+          {trainHint}
+        </div>
+      )}
 
       {error && (
         <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700">
@@ -638,22 +781,30 @@ export default function DemoPage() {
 
             <div className="mb-4 rounded-xl border border-zinc-200 bg-stone-50 px-4 py-3">
               <div className="flex flex-wrap items-center gap-2">
-                <Button
-                  size="sm"
-                  variant={sourcePanelMode === 'sync' ? 'default' : 'outline'}
-                  disabled={!canSyncWithArtifacts}
-                  onClick={() => setSourcePanelMode('sync')}
-                >
-                  训练同步片段
-                </Button>
-                <Button
-                  size="sm"
-                  variant={sourcePanelMode === 'preview' ? 'default' : 'outline'}
-                  disabled={!currentVideoUrl}
-                  onClick={() => setSourcePanelMode('preview')}
-                >
-                  素材预览片段
-                </Button>
+                <div className="inline-flex overflow-hidden rounded-lg border border-zinc-300 bg-white">
+                  <button
+                    disabled={!canSyncWithArtifacts}
+                    onClick={() => setSourcePanelMode('sync')}
+                    className={`px-3 py-2 text-sm font-semibold ${
+                      sourcePanelMode === 'sync'
+                        ? 'bg-zinc-900 text-white'
+                        : 'bg-white text-zinc-700 hover:bg-zinc-100'
+                    } ${!canSyncWithArtifacts ? 'cursor-not-allowed opacity-40' : ''}`}
+                  >
+                    训练同步片段
+                  </button>
+                  <button
+                    disabled={!currentVideoUrl}
+                    onClick={() => setSourcePanelMode('preview')}
+                    className={`border-l border-zinc-300 px-3 py-2 text-sm font-semibold ${
+                      sourcePanelMode === 'preview'
+                        ? 'bg-zinc-900 text-white'
+                        : 'bg-white text-zinc-700 hover:bg-zinc-100'
+                    } ${!currentVideoUrl ? 'cursor-not-allowed opacity-40' : ''}`}
+                  >
+                    素材预览片段
+                  </button>
+                </div>
                 <Button size="sm" onClick={() => void handleSyncPlay()} disabled={!syncReady} className="h-9">
                   播放
                 </Button>
@@ -673,7 +824,7 @@ export default function DemoPage() {
                   <option value={1.5}>1.5x</option>
                 </select>
                 <span className="ml-auto text-xs text-zinc-600">
-                  {formatClock(syncCurrentTime)} / {formatClock(syncDuration)}
+                  {formatClock(syncCurrentTime)} / {formatClock(syncDuration)} · 训练进度 {(followProgress * 100).toFixed(1)}%
                   {syncPlaying ? '（播放中）' : '（暂停）'}
                 </span>
               </div>

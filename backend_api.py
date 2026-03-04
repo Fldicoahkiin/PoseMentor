@@ -209,10 +209,11 @@ def _assert_aist_dataset(dataset_id: str) -> None:
 
 
 def _job_to_dict(job: JobRecord) -> dict[str, object]:
+    status = "succeeded" if job.status == "success" else job.status
     return {
         "job_id": job.job_id,
         "name": job.name,
-        "status": job.status,
+        "status": status,
         "command": job.command,
         "created_at": job.created_at,
         "started_at": job.started_at,
@@ -220,6 +221,74 @@ def _job_to_dict(job: JobRecord) -> dict[str, object]:
         "return_code": job.return_code,
         "log_path": job.log_path,
         "error_message": job.error_message,
+    }
+
+
+def _read_job_log_text(path: Path, max_chars: int = 200_000) -> str:
+    if not path.exists():
+        return ""
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    if max_chars > 0:
+        text = text[-max_chars:]
+    return text
+
+
+def _parse_job_progress(job: JobRecord, log_text: str) -> dict[str, object]:
+    status = "succeeded" if job.status == "success" else job.status
+    phase = "generic"
+    if "train_3d_lift" in job.name:
+        phase = "train"
+    elif "evaluate_model" in job.name:
+        phase = "evaluate"
+    elif "pose_extract" in job.name:
+        phase = "extract"
+    elif "data_prepare" in job.name:
+        phase = "prepare"
+    elif "multiview_prepare" in job.name:
+        phase = "multiview"
+
+    progress = 1.0 if status == "succeeded" else 0.0
+    current_step = 0
+    total_step = 0
+    marker_matches = re.findall(r"\[PROGRESS\]\s*epoch=(\d+)(?:\s*/\s*(\d+))?", log_text)
+    if marker_matches:
+        current_raw, total_raw = marker_matches[-1]
+        current_step = int(current_raw)
+        total_step = int(total_raw) if total_raw else 0
+        if total_step > 0:
+            progress = max(progress, min(1.0, current_step / total_step))
+    else:
+        pair_matches = re.findall(r"\((\d+)\s*/\s*(\d+)\)", log_text)
+        if pair_matches:
+            current_step, total_step = map(int, pair_matches[-1])
+            if total_step > 0:
+                progress = max(progress, min(1.0, current_step / total_step))
+
+    if status == "failed":
+        progress = max(0.0, min(1.0, progress))
+
+    event_lines: list[str] = []
+    for line in reversed(log_text.splitlines()):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith(
+            ("[PROGRESS]", "[SUMMARY]", "[DONE]", "[INFO]", "[WARN]", "[ERROR]")
+        ):
+            event_lines.append(stripped)
+        if len(event_lines) >= 6:
+            break
+    event_lines.reverse()
+
+    return {
+        "job_id": job.job_id,
+        "name": job.name,
+        "status": status,
+        "phase": phase,
+        "progress": progress,
+        "current_step": current_step,
+        "total_step": total_step,
+        "events": event_lines,
     }
 
 
@@ -464,6 +533,19 @@ def get_job_log(job_id: str, max_chars: int = 8000) -> dict[str, str]:
     if max_chars > 0:
         text = text[-max_chars:]
     return {"log": text}
+
+
+@app.get("/jobs/{job_id}/progress")
+@app.get("/api/jobs/{job_id}/progress")
+def get_job_progress(job_id: str) -> dict[str, object]:
+    try:
+        job = store.get(job_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="job not found") from exc
+
+    log_path = Path(job.log_path)
+    log_text = _read_job_log_text(log_path, max_chars=200_000)
+    return _parse_job_progress(job=job, log_text=log_text)
 
 
 @app.post("/jobs/data/prepare")

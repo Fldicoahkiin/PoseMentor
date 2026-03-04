@@ -83,6 +83,11 @@ def test_workspace_source_preview_route() -> None:
     assert "samples" in payload
 
 
+def test_job_progress_route_not_found() -> None:
+    response = client.get("/jobs/not-exists/progress")
+    assert response.status_code == 404
+
+
 def test_upsert_dataset_updates_registry(monkeypatch, tmp_path: Path) -> None:
     registry = tmp_path / "datasets.yaml"
     registry.write_text(

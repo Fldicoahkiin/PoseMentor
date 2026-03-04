@@ -566,3 +566,8 @@ class TrainingVisualizationCallback(Callback):
         self.history.append(item)
         self._dump()
         self._write_sample_visualization(trainer=trainer, pl_module=pl_module)
+        max_epochs = int(getattr(trainer, "max_epochs", 0) or 0)
+        if max_epochs > 0:
+            print(f"[PROGRESS] epoch={item.epoch + 1}/{max_epochs}")
+        else:
+            print(f"[PROGRESS] epoch={item.epoch + 1}")

@@ -17,12 +17,23 @@ export type JobItem = {
   name: string;
   status: string;
   command: string[];
-  created_at: string;
-  started_at?: string | null;
-  finished_at?: string | null;
+  created_at: number;
+  started_at?: number | null;
+  finished_at?: number | null;
   return_code?: number | null;
   error_message?: string | null;
   log_path: string;
+};
+
+export type JobProgress = {
+  job_id: string;
+  name: string;
+  status: string;
+  phase: string;
+  progress: number;
+  current_step: number;
+  total_step: number;
+  events: string[];
 };
 
 export type ArtifactStatus = {
@@ -125,6 +136,11 @@ export async function fetchJobs() {
 export async function fetchJobLog(jobId: string) {
   const { data } = await client.get<{ log: string }>(`/jobs/${jobId}/log`);
   return data.log;
+}
+
+export async function fetchJobProgress(jobId: string) {
+  const { data } = await client.get<JobProgress>(`/jobs/${jobId}/progress`);
+  return data;
 }
 
 export async function fetchArtifactStatus() {

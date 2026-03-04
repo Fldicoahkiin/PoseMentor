@@ -46,6 +46,7 @@ flowchart LR
 - `GET /jobs`
 - `GET /jobs/{job_id}`
 - `GET /jobs/{job_id}/log`
+- `GET /jobs/{job_id}/progress`
 - `POST /jobs/data/prepare`
 - `POST /jobs/pose/extract`
 - `POST /jobs/train`

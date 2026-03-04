@@ -121,6 +121,7 @@ curl http://127.0.0.1:8787/datasets
 - 后端接口：`POST /datasets/upsert`
 - 注册表文件：`configs/datasets.yaml`
 - 四机位接入时，只需配置 `video_root` 到本地目录（例如 `data/raw/multiview`）
+- 任务过程进度：`GET /jobs/{job_id}/progress`
 
 ## 常用命令
 

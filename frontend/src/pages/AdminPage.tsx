@@ -8,11 +8,13 @@ import {
   createPoseExtractJob,
   createTrainJob,
   fetchDatasets,
+  fetchJobProgress,
   fetchJobLog,
   fetchJobs,
   upsertDataset,
   type DatasetItem,
   type JobItem,
+  type JobProgress,
 } from '../lib/api';
 
 type TabKey = 'overview' | 'datasets' | 'data' | 'extract' | 'train' | 'multiview' | 'evaluate';
@@ -23,6 +25,7 @@ export default function AdminPage() {
   const [jobs, setJobs] = useState<JobItem[]>([]);
   const [selectedJobId, setSelectedJobId] = useState('');
   const [jobLog, setJobLog] = useState('');
+  const [jobProgressMap, setJobProgressMap] = useState<Record<string, JobProgress>>({});
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -97,6 +100,58 @@ export default function AdminPage() {
   }, [selectedJobId]);
 
   useEffect(() => {
+    const targetIds = new Set<string>();
+    jobs
+      .filter((job) => job.status === 'running' || job.status === 'queued' || job.status === 'succeeded')
+      .slice(0, 12)
+      .forEach((job) => targetIds.add(job.job_id));
+    if (selectedJobId) {
+      targetIds.add(selectedJobId);
+    }
+    if (targetIds.size === 0) {
+      setJobProgressMap({});
+      return;
+    }
+
+    let cancelled = false;
+    const refreshProgress = async () => {
+      const updates = await Promise.all(
+        [...targetIds].map(async (jobId) => {
+          try {
+            const progress = await fetchJobProgress(jobId);
+            return [jobId, progress] as const;
+          } catch {
+            return null;
+          }
+        }),
+      );
+      if (cancelled) {
+        return;
+      }
+      setJobProgressMap((prev) => {
+        const next = { ...prev };
+        updates.forEach((entry) => {
+          if (!entry) {
+            return;
+          }
+          const [jobId, progress] = entry;
+          next[jobId] = progress;
+        });
+        return next;
+      });
+    };
+
+    void refreshProgress();
+    const timer = window.setInterval(() => {
+      void refreshProgress();
+    }, 2000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [jobs, selectedJobId]);
+
+  useEffect(() => {
     if (datasets.length === 0) {
       return;
     }
@@ -158,6 +213,14 @@ export default function AdminPage() {
       setBusy(false);
     }
   }, [refresh]);
+
+  const getJobProgressRatio = useCallback((job: JobItem) => {
+    const progress = jobProgressMap[job.job_id];
+    if (progress && Number.isFinite(progress.progress)) {
+      return Math.max(0, Math.min(1, progress.progress));
+    }
+    return job.status === 'succeeded' ? 1 : 0;
+  }, [jobProgressMap]);
 
   const saveDataset = useCallback(async () => {
     setBusy(true);
@@ -274,10 +337,13 @@ export default function AdminPage() {
                       <th className="px-3 py-2">作业ID</th>
                       <th className="px-3 py-2">类型</th>
                       <th className="px-3 py-2">状态</th>
+                      <th className="px-3 py-2">进度</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {jobs.map((job) => (
+                    {jobs.map((job) => {
+                      const ratio = getJobProgressRatio(job);
+                      return (
                       <tr
                         key={job.job_id}
                         className={`cursor-pointer border-t border-zinc-100 ${selectedJobId === job.job_id ? 'bg-zinc-100' : 'hover:bg-zinc-50'}`}
@@ -286,14 +352,31 @@ export default function AdminPage() {
                         <td className="px-3 py-2 font-mono text-xs text-zinc-700">{job.job_id}</td>
                         <td className="px-3 py-2 text-zinc-700">{job.name}</td>
                         <td className="px-3 py-2 text-zinc-600">{job.status}</td>
+                        <td className="px-3 py-2 text-zinc-700">
+                          <div className="flex items-center gap-2">
+                            <div className="h-2 w-28 overflow-hidden rounded-full bg-zinc-200">
+                              <div className="h-full bg-zinc-900" style={{ width: `${(ratio * 100).toFixed(1)}%` }} />
+                            </div>
+                            <span className="text-xs">{(ratio * 100).toFixed(1)}%</span>
+                          </div>
+                        </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
 
               <div>
                 <h4 className="mb-2 text-sm font-bold text-zinc-800">日志预览</h4>
+                {selectedJobId && jobProgressMap[selectedJobId] && (
+                  <div className="mb-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-700">
+                    任务进度：{(Math.max(0, Math.min(1, jobProgressMap[selectedJobId].progress)) * 100).toFixed(1)}%
+                    {jobProgressMap[selectedJobId].events.length > 0
+                      ? ` · ${jobProgressMap[selectedJobId].events[jobProgressMap[selectedJobId].events.length - 1]}`
+                      : ''}
+                  </div>
+                )}
                 <pre className="h-48 overflow-auto rounded-xl border border-zinc-200 bg-zinc-950 p-3 text-xs leading-5 text-zinc-200">{jobLog || '请选择作业查看日志'}</pre>
               </div>
             </div>

@@ -131,6 +131,10 @@ uv run python extract_pose_aist2d.py --config configs/data.yaml --camera-index 1
 uv run python train_3d_lift_demo.py --config configs/train.yaml --export-onnx
 ```
 
+前端可视化路径：
+- `http://127.0.0.1:7860/` 点击 `开始训练`
+- 页面会自动轮询任务进度并联动同步片段播放（素材/2D/3D）
+
 训练输出：
 - `artifacts/lift_demo.ckpt`
 - `artifacts/lift_demo_norm.npz`
