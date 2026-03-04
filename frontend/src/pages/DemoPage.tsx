@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import {
   Activity,
-  Boxes,
-  CheckCircle2,
   Database,
   FileStack,
   Film,
@@ -94,7 +92,6 @@ export default function DemoPage() {
   const [selectedStandardId, setSelectedStandardId] = useState('');
   const [selectedVideoIndex, setSelectedVideoIndex] = useState(0);
   const [summaryText, setSummaryText] = useState('');
-  const [copiedCommand, setCopiedCommand] = useState('');
   const [syncCurrentTime, setSyncCurrentTime] = useState(0);
   const [syncDuration, setSyncDuration] = useState(0);
   const [syncPlaying, setSyncPlaying] = useState(false);
@@ -275,28 +272,6 @@ export default function DemoPage() {
     [artifactManifest],
   );
 
-  const commandQuickList = useMemo(
-    () => [
-      'uv run posementor config',
-      'uv run posementor init',
-      'uv run posementor doctor',
-      'uv run posementor quickstart --epochs 1 --up',
-      './posementor status',
-      './posementor logs --service all --lines 120',
-    ],
-    [],
-  );
-
-  const copyCommand = useCallback(async (command: string) => {
-    try {
-      await navigator.clipboard.writeText(command);
-      setCopiedCommand(command);
-      window.setTimeout(() => setCopiedCommand(''), 1200);
-    } catch {
-      setCopiedCommand('');
-    }
-  }, []);
-
   const sampleVideoUrl =
     artifactStatus?.sample_video_exists && artifactStatus.sample_video_url
       ? `${backendBaseUrl}${artifactStatus.sample_video_url}`
@@ -475,128 +450,95 @@ export default function DemoPage() {
         </div>
       </section>
 
-      <section className="grid grid-cols-1 gap-6 xl:grid-cols-[360px_minmax(0,1fr)]">
-        <aside className="space-y-6">
-          <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
-            <h2 className="mb-4 flex items-center gap-2 text-base font-bold text-zinc-800">
-              <Database size={18} />
-              素材与标准库
-            </h2>
-            <div className="space-y-3">
-              <div>
-                <label className="mb-1 block text-xs font-bold uppercase tracking-wider text-zinc-500">
-                  训练数据集
-                </label>
-                <select
-                  value={selectedDatasetId}
-                  onChange={(event) => setSelectedDatasetId(event.target.value)}
-                  className="w-full rounded-xl border border-zinc-200 bg-stone-50 px-3 py-2 text-sm"
-                >
-                  {datasets.map((dataset) => (
-                    <option key={dataset.id} value={dataset.id}>
-                      {dataset.name} · {dataset.id}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="mb-1 block text-xs font-bold uppercase tracking-wider text-zinc-500">
-                  评分标准库
-                </label>
-                <select
-                  value={selectedStandardId}
-                  onChange={(event) => setSelectedStandardId(event.target.value)}
-                  className="w-full rounded-xl border border-zinc-200 bg-stone-50 px-3 py-2 text-sm"
-                >
-                  {standards.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="rounded-xl border border-zinc-200 bg-stone-50 p-3 text-sm text-zinc-600">
-                <p>
-                  当前数据源：<span className="font-semibold text-zinc-800">{selectedDataset?.mode || 'unknown'}</span>
-                </p>
-                <p>
-                  当前标准库：<span className="font-semibold text-zinc-800">{selectedStandard?.name || '-'}</span>
-                </p>
-              </div>
-              <Button
-                variant="outline"
-                className="h-10 w-full gap-2"
-                disabled={previewLoading || !selectedDatasetId}
-                onClick={() => void refreshPreview(selectedDatasetId)}
-              >
-                <RefreshCw size={16} className={previewLoading ? 'animate-spin' : ''} />
-                刷新素材预览
-              </Button>
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
-            <h2 className="mb-4 flex items-center gap-2 text-base font-bold text-zinc-800">
-              <CheckCircle2 size={18} />
-              自动化流程状态
-            </h2>
-            <div className="space-y-2">
-              {pipelineSteps.map((step) => (
-                <div key={step.name} className="rounded-xl border border-zinc-200 bg-stone-50 px-3 py-2">
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="text-sm font-semibold text-zinc-800">{step.name}</span>
-                    <span
-                      className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
-                        step.status === 'ready'
-                          ? 'bg-emerald-100 text-emerald-700'
-                          : step.status === 'running'
-                            ? 'bg-amber-100 text-amber-700'
-                            : step.status === 'error'
-                              ? 'bg-rose-100 text-rose-700'
-                              : 'bg-zinc-200 text-zinc-600'
-                      }`}
-                    >
-                      {step.status}
-                    </span>
-                  </div>
-                  <p className="mt-1 text-xs text-zinc-500">{step.detail}</p>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
-            <h2 className="mb-4 text-base font-bold text-zinc-800">常用命令</h2>
-            <div className="space-y-2">
-              {commandQuickList.map((command) => (
-                <button
-                  key={command}
-                  onClick={() => void copyCommand(command)}
-                  className="w-full rounded-lg border border-zinc-200 bg-stone-50 px-3 py-2 text-left text-sm hover:bg-stone-100"
-                >
-                  <p className="font-mono text-xs text-zinc-700">{command}</p>
-                </button>
-              ))}
-            </div>
-            <p className="mt-3 text-xs text-zinc-500">
-              {copiedCommand ? `已复制：${copiedCommand}` : '点击命令可复制到剪贴板'}
-            </p>
-          </div>
-
-          <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
-            <h2 className="mb-4 flex items-center gap-2 text-base font-bold text-zinc-800">
-              <Boxes size={18} />
-              标准化策略
-            </h2>
-            <ul className="space-y-2 text-sm text-zinc-600">
-              <li>已自动化：对齐、统一格式、2D提取、训练产物归档</li>
-              <li>规划中：标定管理、三角化3D、自动质检闭环</li>
-              <li>评分使用独立标准库，不与训练数据源混用</li>
-            </ul>
-          </div>
-        </aside>
-
+      <section className="space-y-6">
         <div className="space-y-6">
+            <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h2 className="flex items-center gap-2 text-base font-bold text-zinc-800">
+                  <Database size={18} />
+                  素材与状态面板
+                </h2>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-2"
+                  disabled={previewLoading || !selectedDatasetId}
+                  onClick={() => void refreshPreview(selectedDatasetId)}
+                >
+                  <RefreshCw size={14} className={previewLoading ? 'animate-spin' : ''} />
+                  刷新素材预览
+                </Button>
+              </div>
+              <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-2">
+                <div>
+                  <label className="mb-1 block text-xs font-bold uppercase tracking-wider text-zinc-500">
+                    训练数据集
+                  </label>
+                  <select
+                    value={selectedDatasetId}
+                    onChange={(event) => setSelectedDatasetId(event.target.value)}
+                    className="w-full rounded-xl border border-zinc-200 bg-stone-50 px-3 py-2 text-sm"
+                  >
+                    {datasets.map((dataset) => (
+                      <option key={dataset.id} value={dataset.id}>
+                        {dataset.name} · {dataset.id}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-bold uppercase tracking-wider text-zinc-500">
+                    评分标准库
+                  </label>
+                  <select
+                    value={selectedStandardId}
+                    onChange={(event) => setSelectedStandardId(event.target.value)}
+                    className="w-full rounded-xl border border-zinc-200 bg-stone-50 px-3 py-2 text-sm"
+                  >
+                    {standards.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div className="mt-3 grid grid-cols-1 gap-2 lg:grid-cols-3">
+                <div className="rounded-xl border border-zinc-200 bg-stone-50 px-3 py-2 text-sm text-zinc-700">
+                  当前数据源：<span className="font-semibold text-zinc-900">{selectedDataset?.mode || 'unknown'}</span>
+                </div>
+                <div className="rounded-xl border border-zinc-200 bg-stone-50 px-3 py-2 text-sm text-zinc-700">
+                  当前标准库：<span className="font-semibold text-zinc-900">{selectedStandard?.name || '-'}</span>
+                </div>
+                <div className="rounded-xl border border-zinc-200 bg-stone-50 px-3 py-2 text-sm text-zinc-700">
+                  视频根目录：<span className="font-semibold text-zinc-900">{sourcePreview?.video_root || '-'}</span>
+                </div>
+              </div>
+              <div className="mt-3 grid grid-cols-1 gap-2 lg:grid-cols-2">
+                {pipelineSteps.map((step) => (
+                  <div key={step.name} className="rounded-xl border border-zinc-200 bg-stone-50 px-3 py-2">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-sm font-semibold text-zinc-800">{step.name}</span>
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+                          step.status === 'ready'
+                            ? 'bg-emerald-100 text-emerald-700'
+                            : step.status === 'running'
+                              ? 'bg-amber-100 text-amber-700'
+                              : step.status === 'error'
+                                ? 'bg-rose-100 text-rose-700'
+                                : 'bg-zinc-200 text-zinc-600'
+                        }`}
+                      >
+                        {step.status}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-xs text-zinc-500">{step.detail}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+
           <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
               <h2 className="flex items-center gap-2 text-base font-bold text-zinc-800">
@@ -650,7 +592,7 @@ export default function DemoPage() {
               />
             </div>
 
-            <div className="grid grid-cols-1 gap-4 2xl:grid-cols-2">
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
               <div className="rounded-xl border border-zinc-200 bg-stone-50 p-3">
                 <h3 className="mb-2 text-sm font-bold text-zinc-800">素材视频</h3>
                 {syncSourceVideoUrl ? (
@@ -663,10 +605,10 @@ export default function DemoPage() {
                     onTimeUpdate={(event) => handleSyncTimeUpdate(event.currentTarget)}
                     onPlay={() => setSyncPlaying(true)}
                     onPause={() => setSyncPlaying(false)}
-                    className="h-[300px] w-full rounded-lg border border-zinc-200 bg-black object-contain"
+                    className="h-[260px] w-full rounded-lg border border-zinc-200 bg-black object-contain lg:h-[34vh]"
                   />
                 ) : (
-                  <div className="flex h-[300px] items-center justify-center rounded-lg border border-dashed border-zinc-300 bg-white text-sm text-zinc-500">
+                  <div className="flex h-[260px] items-center justify-center rounded-lg border border-dashed border-zinc-300 bg-white text-sm text-zinc-500 lg:h-[34vh]">
                     {previewLoading ? '正在加载素材预览...' : '当前数据集暂无可预览视频'}
                   </div>
                 )}
@@ -702,12 +644,12 @@ export default function DemoPage() {
                     onTimeUpdate={(event) => handleSyncTimeUpdate(event.currentTarget)}
                     onPlay={() => setSyncPlaying(true)}
                     onPause={() => setSyncPlaying(false)}
-                    className="h-[300px] w-full rounded-lg border border-zinc-200 bg-black object-contain"
+                    className="h-[260px] w-full rounded-lg border border-zinc-200 bg-black object-contain lg:h-[34vh]"
                   />
                 ) : artifactStatus?.sample_2d_exists ? (
-                  <img src={sample2dUrl} alt="训练2D样例" className="h-[300px] w-full rounded-lg border border-zinc-200 bg-white object-contain" />
+                  <img src={sample2dUrl} alt="训练2D样例" className="h-[260px] w-full rounded-lg border border-zinc-200 bg-white object-contain lg:h-[34vh]" />
                 ) : (
-                  <div className="flex h-[300px] items-center justify-center rounded-lg border border-dashed border-zinc-300 bg-white text-sm text-zinc-500">
+                  <div className="flex h-[260px] items-center justify-center rounded-lg border border-dashed border-zinc-300 bg-white text-sm text-zinc-500 lg:h-[34vh]">
                     暂无 2D 样例，请先执行训练任务
                   </div>
                 )}
@@ -725,12 +667,12 @@ export default function DemoPage() {
                     onTimeUpdate={(event) => handleSyncTimeUpdate(event.currentTarget)}
                     onPlay={() => setSyncPlaying(true)}
                     onPause={() => setSyncPlaying(false)}
-                    className="h-[300px] w-full rounded-lg border border-zinc-200 bg-black object-contain"
+                    className="h-[260px] w-full rounded-lg border border-zinc-200 bg-black object-contain lg:h-[34vh]"
                   />
                 ) : artifactStatus?.sample_3d_exists ? (
-                  <iframe title="训练3D样例" src={sample3dUrl} className="h-[300px] w-full rounded-lg border border-zinc-200 bg-white" />
+                  <iframe title="训练3D样例" src={sample3dUrl} className="h-[260px] w-full rounded-lg border border-zinc-200 bg-white lg:h-[34vh]" />
                 ) : (
-                  <div className="flex h-[300px] items-center justify-center rounded-lg border border-dashed border-zinc-300 bg-white text-sm text-zinc-500">
+                  <div className="flex h-[260px] items-center justify-center rounded-lg border border-dashed border-zinc-300 bg-white text-sm text-zinc-500 lg:h-[34vh]">
                     暂无 3D 样例，请先执行训练任务
                   </div>
                 )}
@@ -739,9 +681,9 @@ export default function DemoPage() {
               <div className="rounded-xl border border-zinc-200 bg-stone-50 p-3">
                 <h3 className="mb-2 text-sm font-bold text-zinc-800">训练曲线</h3>
                 {artifactStatus?.curves_exists ? (
-                  <iframe title="训练曲线" src={curvesUrl} className="h-[300px] w-full rounded-lg border border-zinc-200 bg-white" />
+                  <iframe title="训练曲线" src={curvesUrl} className="h-[260px] w-full rounded-lg border border-zinc-200 bg-white lg:h-[34vh]" />
                 ) : (
-                  <div className="flex h-[300px] items-center justify-center rounded-lg border border-dashed border-zinc-300 bg-white text-sm text-zinc-500">
+                  <div className="flex h-[260px] items-center justify-center rounded-lg border border-dashed border-zinc-300 bg-white text-sm text-zinc-500 lg:h-[34vh]">
                     暂无训练曲线，请先执行训练任务
                   </div>
                 )}
