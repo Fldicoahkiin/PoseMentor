@@ -1,0 +1,15 @@
+profile: quick
+network:
+  backend_host: 127.0.0.1
+  backend_port: 8787
+  frontend_host: 127.0.0.1
+  frontend_port: 7860
+defaults:
+  dataset_id: aistpp
+  standard_id: private_action_core
+  train_config: configs/train.yaml
+  data_config: configs/data.yaml
+runtime:
+  logs_dir: outputs/runtime/logs
+  pids_dir: outputs/runtime/pids
+  tail_lines: 120

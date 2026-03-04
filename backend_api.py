@@ -271,15 +271,27 @@ def artifact_status() -> dict[str, object]:
     curves_file = ARTIFACT_ROOT / "visualizations" / "training_curves.html"
     sample2d_file = ARTIFACT_ROOT / "visualizations" / "samples" / "sample_2d_latest.png"
     sample3d_file = ARTIFACT_ROOT / "visualizations" / "samples" / "sample_3d_latest.html"
+    sample_video_file = ARTIFACT_ROOT / "visualizations" / "samples" / "sample_video_latest.mp4"
+    sample2d_video_file = ARTIFACT_ROOT / "visualizations" / "samples" / "sample_2d_latest.mp4"
+    sample3d_video_file = ARTIFACT_ROOT / "visualizations" / "samples" / "sample_3d_latest.mp4"
+    sample_sync_meta_file = ARTIFACT_ROOT / "visualizations" / "samples" / "sample_sync_meta_latest.json"
     summary_file = ARTIFACT_ROOT / "visualizations" / "samples" / "sample_summary_latest.txt"
 
     return {
         "curves_exists": curves_file.exists(),
         "curves_url": "/artifacts-files/visualizations/training_curves.html",
+        "sample_video_exists": sample_video_file.exists(),
+        "sample_video_url": "/artifacts-files/visualizations/samples/sample_video_latest.mp4",
         "sample_2d_exists": sample2d_file.exists(),
         "sample_2d_url": "/artifacts-files/visualizations/samples/sample_2d_latest.png",
+        "sample_2d_video_exists": sample2d_video_file.exists(),
+        "sample_2d_video_url": "/artifacts-files/visualizations/samples/sample_2d_latest.mp4",
         "sample_3d_exists": sample3d_file.exists(),
         "sample_3d_url": "/artifacts-files/visualizations/samples/sample_3d_latest.html",
+        "sample_3d_video_exists": sample3d_video_file.exists(),
+        "sample_3d_video_url": "/artifacts-files/visualizations/samples/sample_3d_latest.mp4",
+        "sample_sync_meta_exists": sample_sync_meta_file.exists(),
+        "sample_sync_meta_url": "/artifacts-files/visualizations/samples/sample_sync_meta_latest.json",
         "summary_exists": summary_file.exists(),
         "summary_url": "/artifacts-files/visualizations/samples/sample_summary_latest.txt",
     }

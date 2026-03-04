@@ -147,6 +147,18 @@ pnpm dev --host 127.0.0.1 --port 7860
 
 前端地址：`http://127.0.0.1:7860`
 
+如果之前跑过旧版前端（如历史 Gradio 服务）导致端口混乱，先执行：
+
+```bash
+uv run posementor cleanup
+```
+
+训练工作台的四联同步播放依赖以下训练产物（训练一轮后自动生成）：
+
+- `artifacts/visualizations/samples/sample_video_latest.mp4`
+- `artifacts/visualizations/samples/sample_2d_latest.mp4`
+- `artifacts/visualizations/samples/sample_3d_latest.mp4`
+
 ## 7. 快速验证
 
 健康检查：

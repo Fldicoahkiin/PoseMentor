@@ -98,6 +98,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", type=Path, default=Path("configs/train.yaml"))
     parser.add_argument("--yolo2d-dir", type=Path, default=None, help="训练2D目录，默认取 config.data.yolo2d_dir")
     parser.add_argument("--gt3d-dir", type=Path, default=None, help="训练3D目录，默认取 config.data.gt3d_dir")
+    parser.add_argument(
+        "--videos-root",
+        type=Path,
+        default=None,
+        help="原始视频目录，用于输出同步可视化视频（默认 data/raw/aistpp/videos）",
+    )
     parser.add_argument("--artifact-dir", type=Path, default=None, help="输出目录，默认取 config.train.artifact_dir")
     parser.add_argument("--export-onnx", action="store_true")
     parser.add_argument("--epochs", type=int, default=0, help="覆盖配置中的训练轮数，0 表示使用配置值")
@@ -157,18 +163,22 @@ def main() -> None:
 
     yolo_dir = args.yolo2d_dir if args.yolo2d_dir is not None else Path(data_cfg["yolo2d_dir"])
     gt_dir = args.gt3d_dir if args.gt3d_dir is not None else Path(data_cfg["gt3d_dir"])
+    videos_root_cfg = data_cfg.get("videos_root", "data/raw/aistpp/videos")
+    videos_root = args.videos_root if args.videos_root is not None else Path(videos_root_cfg)
 
     train_pairs = load_sequence_pairs(
         yolo_dir=yolo_dir,
         gt_dir=gt_dir,
         val_ratio=float(data_cfg["val_ratio"]),
         split="train",
+        videos_root=videos_root,
     )
     val_pairs = load_sequence_pairs(
         yolo_dir=yolo_dir,
         gt_dir=gt_dir,
         val_ratio=float(data_cfg["val_ratio"]),
         split="val",
+        videos_root=videos_root,
     )
 
     if args.max_train_pairs > 0:

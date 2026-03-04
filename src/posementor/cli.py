@@ -3,12 +3,14 @@ from __future__ import annotations
 import argparse
 import os
 import platform
+import re
 import shutil
 import signal
 import socket
 import subprocess
 import sys
 import time
+from http.client import HTTPConnection
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +20,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 LOCAL_CONFIG_FILE = PROJECT_ROOT / "configs" / "local.yaml"
 BACKEND_SERVICE = "backend_api"
 FRONTEND_SERVICE = "frontend"
+LEGACY_FRONTEND_PATTERNS = ("app_demo.py", "admin_console.py")
+VITE_PORT_PATTERN = re.compile(r"--port\s+(\d+)")
 
 
 def _run_python_script(script: str, extra_args: list[str]) -> int:
@@ -160,7 +164,10 @@ def _stop_process(pid: int) -> None:
             stderr=subprocess.DEVNULL,
         )
         return
-    os.kill(pid, signal.SIGTERM)
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
 
 
 def _service_commands(local_cfg: dict[str, Any]) -> dict[str, list[str]]:
@@ -199,6 +206,8 @@ def _start_service(local_cfg: dict[str, Any], service_name: str) -> int:
     if existing_pid is not None and _is_pid_running(existing_pid):
         print(f"[SKIP] {service_name} 已在运行 (pid={existing_pid})")
         return 0
+    if existing_pid is not None and pid_path.exists():
+        pid_path.unlink()
 
     command = _service_commands(local_cfg).get(service_name)
     if command is None:
@@ -207,6 +216,14 @@ def _start_service(local_cfg: dict[str, Any], service_name: str) -> int:
     if shutil.which(command[0]) is None:
         print(f"[ERROR] 未找到命令: {command[0]}")
         return 2
+
+    host, port = _service_host_port(local_cfg, service_name)
+    if _port_is_occupied(host, port):
+        if _service_health_ok(service_name, host, port):
+            print(f"[SKIP] {service_name} 已在线 ({host}:{port})")
+            return 0
+        print(f"[ERROR] {service_name} 端口被占用但健康检查失败: {host}:{port}")
+        return 4
 
     log_path = _log_file(logs_dir, service_name)
     with log_path.open("ab") as logf:
@@ -233,6 +250,10 @@ def _stop_service(local_cfg: dict[str, Any], service_name: str) -> int:
     pid_path = _pid_file(pids_dir, service_name)
     pid = _read_pid(pid_path)
     if pid is None:
+        host, port = _service_host_port(local_cfg, service_name)
+        if _port_is_occupied(host, port) and _service_health_ok(service_name, host, port):
+            print(f"[SKIP] {service_name} 正在运行但不由 CLI 托管 ({host}:{port})")
+            return 0
         print(f"[SKIP] {service_name} 未运行")
         return 0
 
@@ -263,6 +284,125 @@ def _port_is_occupied(host: str, port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.settimeout(0.3)
         return sock.connect_ex((host, port)) == 0
+
+
+def _service_host_port(local_cfg: dict[str, Any], service_name: str) -> tuple[str, int]:
+    network_cfg = local_cfg.get("network", {})
+    if service_name == BACKEND_SERVICE:
+        return str(network_cfg.get("backend_host", "127.0.0.1")), int(network_cfg.get("backend_port", 8787))
+    if service_name == FRONTEND_SERVICE:
+        return str(network_cfg.get("frontend_host", "127.0.0.1")), int(network_cfg.get("frontend_port", 7860))
+    raise ValueError(f"未知服务: {service_name}")
+
+
+def _service_health_ok(service_name: str, host: str, port: int) -> bool:
+    path = "/health" if service_name == BACKEND_SERVICE else "/"
+    try:
+        connection = HTTPConnection(host=host, port=port, timeout=1.0)
+        connection.request("GET", path)
+        response = connection.getresponse()
+        body = response.read(200).decode("utf-8", errors="ignore")
+        connection.close()
+    except OSError:
+        return False
+    if service_name == BACKEND_SERVICE:
+        return response.status == 200 and "ok" in body.lower()
+    return response.status in {200, 304}
+
+
+def _list_local_processes() -> list[tuple[int, str]]:
+    if platform.system() == "Windows":
+        return []
+    try:
+        result = subprocess.run(  # noqa: S603
+            ["ps", "-ax", "-o", "pid=,command="],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return []
+    if result.returncode != 0:
+        return []
+
+    rows: list[tuple[int, str]] = []
+    for line in result.stdout.splitlines():
+        text = line.strip()
+        if not text:
+            continue
+        parts = text.split(maxsplit=1)
+        if len(parts) < 2:
+            continue
+        try:
+            pid = int(parts[0])
+        except ValueError:
+            continue
+        if pid == os.getpid():
+            continue
+        rows.append((pid, parts[1]))
+    return rows
+
+
+def _legacy_pids(local_cfg: dict[str, Any]) -> list[tuple[int, str]]:
+    rows = _list_local_processes()
+    network_cfg = local_cfg.get("network", {})
+    configured_frontend_port = int(network_cfg.get("frontend_port", 7860))
+    project_text = str(PROJECT_ROOT)
+    pids: list[tuple[int, str]] = []
+
+    for pid, command in rows:
+        if project_text not in command:
+            continue
+
+        if any(pattern in command for pattern in LEGACY_FRONTEND_PATTERNS):
+            pids.append((pid, command))
+            continue
+
+        if "vite" in command and "frontend" in command:
+            match = VITE_PORT_PATTERN.search(command)
+            if match:
+                try:
+                    port = int(match.group(1))
+                except ValueError:
+                    port = configured_frontend_port
+            else:
+                port = configured_frontend_port
+            if port != configured_frontend_port:
+                pids.append((pid, command))
+    return pids
+
+
+def _cleanup(local_cfg: dict[str, Any]) -> int:
+    failed = False
+    legacy = _legacy_pids(local_cfg)
+    if not legacy:
+        print("[OK] 未发现历史前端进程")
+    else:
+        print("=== 清理历史前端进程 ===")
+        for pid, command in legacy:
+            _stop_process(pid)
+            time.sleep(0.2)
+            if _is_pid_running(pid):
+                failed = True
+                print(f"[WARN] 结束失败 pid={pid} cmd={command}")
+            else:
+                print(f"[OK] 已结束 pid={pid} cmd={command}")
+
+    _, pids_dir = _runtime_dirs(local_cfg)
+    for service_name in [BACKEND_SERVICE, FRONTEND_SERVICE]:
+        pid_path = _pid_file(pids_dir, service_name)
+        pid = _read_pid(pid_path)
+        if pid is None:
+            continue
+        if _is_pid_running(pid):
+            continue
+        pid_path.unlink(missing_ok=True)
+        print(f"[OK] 已清理僵尸 PID 文件: {pid_path}")
+
+    if failed:
+        print("[WARN] 部分进程未结束，请手动检查 `lsof -i :7861` / `lsof -i :7863`")
+        return 1
+    return 0
 
 
 def _doctor(local_cfg: dict[str, Any]) -> int:
@@ -424,6 +564,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("up", help="启动前后端服务")
     sub.add_parser("down", help="停止前后端服务")
     sub.add_parser("status", help="查看服务状态")
+    sub.add_parser("cleanup", help="清理历史前端进程和僵尸 PID 记录")
 
     p_logs = sub.add_parser("logs", help="查看服务日志")
     p_logs.add_argument("--service", choices=[BACKEND_SERVICE, FRONTEND_SERVICE, "all"], default="all")
@@ -582,12 +723,19 @@ def main() -> None:
             elif pid is not None and pid_path.exists():
                 pid_path.unlink()
                 pid = None
+            host, port = _service_host_port(local_cfg, service_name)
+            if status == "stopped" and _port_is_occupied(host, port) and _service_health_ok(service_name, host, port):
+                status = "running(external)"
             print(
                 f"{service_name}: {status}"
                 + (f" (pid={pid})" if pid is not None else "")
+                + f" addr={host}:{port}"
                 + f" log={_log_file(logs_dir, service_name)}"
             )
         raise SystemExit(0)
+
+    if cmd == "cleanup":
+        raise SystemExit(_cleanup(local_cfg))
 
     if cmd == "logs":
         logs_dir, _ = _runtime_dirs(local_cfg)

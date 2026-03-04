@@ -141,6 +141,9 @@ uv run python train_3d_lift_demo.py --config configs/train.yaml --export-onnx
 - `artifacts/lift_demo.ckpt`：PyTorch/Lightning 权重（主推理权重）
 - `artifacts/lift_demo_norm.npz`：2D 归一化参数（训练/推理必须一致）
 - `artifacts/lift_demo.onnx`（可选）：部署版模型（ONNX Runtime / TensorRT）
+- `artifacts/visualizations/samples/sample_video_latest.mp4`：素材同步片段
+- `artifacts/visualizations/samples/sample_2d_latest.mp4`：2D 骨架同步片段
+- `artifacts/visualizations/samples/sample_3d_latest.mp4`：3D 骨架同步片段
 
 这个模型做的事：
 - 输入单摄像头 2D 关键点序列
@@ -195,10 +198,12 @@ uv run posementor doctor
 uv run posementor install-launchers
 uv run posementor up
 uv run posementor status
+uv run posementor cleanup
 uv run posementor logs --service backend_api --lines 80
 uv run posementor down
 
 ./posementor status
+./posementor cleanup
 ./posementor logs --service all --lines 120
 
 uv run python posementor_cli.py extract-aist2d --config configs/data.yaml

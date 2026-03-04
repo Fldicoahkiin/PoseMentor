@@ -58,6 +58,9 @@ def test_artifact_status_route() -> None:
     payload = response.json()
     assert "curves_exists" in payload
     assert "sample_2d_url" in payload
+    assert "sample_video_url" in payload
+    assert "sample_2d_video_url" in payload
+    assert "sample_3d_video_url" in payload
 
 
 def test_artifact_manifest_route() -> None:

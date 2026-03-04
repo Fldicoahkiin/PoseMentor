@@ -26,10 +26,18 @@ export type JobItem = {
 export type ArtifactStatus = {
   curves_exists: boolean;
   curves_url: string;
+  sample_video_exists: boolean;
+  sample_video_url: string;
   sample_2d_exists: boolean;
   sample_2d_url: string;
+  sample_2d_video_exists: boolean;
+  sample_2d_video_url: string;
   sample_3d_exists: boolean;
   sample_3d_url: string;
+  sample_3d_video_exists: boolean;
+  sample_3d_video_url: string;
+  sample_sync_meta_exists: boolean;
+  sample_sync_meta_url: string;
   summary_exists: boolean;
   summary_url: string;
 };

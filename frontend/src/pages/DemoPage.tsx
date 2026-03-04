@@ -1,10 +1,8 @@
-import { useCallback, useEffect, useMemo, useState, type ComponentType } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import {
   Activity,
   Boxes,
-  ChartNoAxesColumn,
   CheckCircle2,
-  Cuboid,
   Database,
   FileStack,
   Film,
@@ -32,7 +30,6 @@ import {
   type StandardItem,
 } from '../lib/api';
 
-type VisualTabKey = 'video' | 'pose2d' | 'pose3d' | 'curves';
 type StepStatus = 'ready' | 'running' | 'waiting' | 'error';
 
 function formatBytes(sizeBytes: number): string {
@@ -54,6 +51,19 @@ function formatTime(value: string): string {
     return value;
   }
   return date.toLocaleString();
+}
+
+function formatClock(totalSeconds: number): string {
+  const value = Number.isFinite(totalSeconds) ? Math.max(0, totalSeconds) : 0;
+  const seconds = Math.floor(value % 60);
+  const minutes = Math.floor((value / 60) % 60);
+  const hours = Math.floor(value / 3600);
+  if (hours > 0) {
+    return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds
+      .toString()
+      .padStart(2, '0')}`;
+  }
+  return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
 }
 
 function toStepStatus(jobStatus: string | undefined): StepStatus {
@@ -82,10 +92,16 @@ export default function DemoPage() {
   const [sourcePreview, setSourcePreview] = useState<SourcePreviewPayload | null>(null);
   const [selectedDatasetId, setSelectedDatasetId] = useState('');
   const [selectedStandardId, setSelectedStandardId] = useState('');
-  const [visualTab, setVisualTab] = useState<VisualTabKey>('video');
   const [selectedVideoIndex, setSelectedVideoIndex] = useState(0);
   const [summaryText, setSummaryText] = useState('');
   const [copiedCommand, setCopiedCommand] = useState('');
+  const [syncCurrentTime, setSyncCurrentTime] = useState(0);
+  const [syncDuration, setSyncDuration] = useState(0);
+  const [syncPlaying, setSyncPlaying] = useState(false);
+  const [syncPlaybackRate, setSyncPlaybackRate] = useState(1);
+  const sourceVideoRef = useRef<HTMLVideoElement | null>(null);
+  const pose2dVideoRef = useRef<HTMLVideoElement | null>(null);
+  const pose3dVideoRef = useRef<HTMLVideoElement | null>(null);
 
   const refreshCore = useCallback(async () => {
     setLoading(true);
@@ -281,10 +297,114 @@ export default function DemoPage() {
     }
   }, []);
 
-  const sample2dUrl = artifactStatus ? `${backendBaseUrl}${artifactStatus.sample_2d_url}` : '';
-  const sample3dUrl = artifactStatus ? `${backendBaseUrl}${artifactStatus.sample_3d_url}` : '';
-  const curvesUrl = artifactStatus ? `${backendBaseUrl}${artifactStatus.curves_url}` : '';
+  const sampleVideoUrl =
+    artifactStatus?.sample_video_exists && artifactStatus.sample_video_url
+      ? `${backendBaseUrl}${artifactStatus.sample_video_url}`
+      : '';
+  const sample2dVideoUrl =
+    artifactStatus?.sample_2d_video_exists && artifactStatus.sample_2d_video_url
+      ? `${backendBaseUrl}${artifactStatus.sample_2d_video_url}`
+      : '';
+  const sample3dVideoUrl =
+    artifactStatus?.sample_3d_video_exists && artifactStatus.sample_3d_video_url
+      ? `${backendBaseUrl}${artifactStatus.sample_3d_video_url}`
+      : '';
+  const sample2dUrl = artifactStatus?.sample_2d_exists ? `${backendBaseUrl}${artifactStatus.sample_2d_url}` : '';
+  const sample3dUrl = artifactStatus?.sample_3d_exists ? `${backendBaseUrl}${artifactStatus.sample_3d_url}` : '';
+  const curvesUrl = artifactStatus?.curves_exists ? `${backendBaseUrl}${artifactStatus.curves_url}` : '';
   const currentVideoUrl = currentVideo?.url ? `${backendBaseUrl}${currentVideo.url}` : '';
+  const syncSourceVideoUrl = sampleVideoUrl || currentVideoUrl;
+  const syncReady = Boolean(syncSourceVideoUrl && sample2dVideoUrl && sample3dVideoUrl);
+  const getSyncVideos = useCallback(
+    () => [sourceVideoRef.current, pose2dVideoRef.current, pose3dVideoRef.current].filter(Boolean) as HTMLVideoElement[],
+    [],
+  );
+
+  const syncSeekAll = useCallback(
+    (timeSeconds: number, skip?: HTMLVideoElement | null) => {
+      getSyncVideos().forEach((element) => {
+        if (element === skip) {
+          return;
+        }
+        if (Math.abs(element.currentTime - timeSeconds) > 0.08) {
+          element.currentTime = timeSeconds;
+        }
+      });
+    },
+    [getSyncVideos],
+  );
+
+  const syncSetRateAll = useCallback(
+    (rate: number) => {
+      getSyncVideos().forEach((element) => {
+        element.playbackRate = rate;
+      });
+    },
+    [getSyncVideos],
+  );
+
+  const handleSyncLoadedMetadata = useCallback((video: HTMLVideoElement) => {
+    if (Number.isFinite(video.duration) && video.duration > 0) {
+      setSyncDuration(video.duration);
+    }
+  }, []);
+
+  const handleSyncTimeUpdate = useCallback(
+    (video: HTMLVideoElement) => {
+      setSyncCurrentTime(video.currentTime);
+      if (syncDuration <= 0 && Number.isFinite(video.duration) && video.duration > 0) {
+        setSyncDuration(video.duration);
+      }
+      syncSeekAll(video.currentTime, video);
+    },
+    [syncDuration, syncSeekAll],
+  );
+
+  const handleSyncPlay = useCallback(async () => {
+    for (const element of getSyncVideos()) {
+      element.playbackRate = syncPlaybackRate;
+      try {
+        await element.play();
+      } catch (err) {
+        console.warn(err);
+      }
+    }
+    setSyncPlaying(true);
+  }, [getSyncVideos, syncPlaybackRate]);
+
+  const handleSyncPause = useCallback(() => {
+    getSyncVideos().forEach((element) => {
+      element.pause();
+    });
+    setSyncPlaying(false);
+  }, [getSyncVideos]);
+
+  const handleSyncSeekInput = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => {
+      const nextTime = Number(event.target.value);
+      setSyncCurrentTime(nextTime);
+      syncSeekAll(nextTime, null);
+      if (sourceVideoRef.current) {
+        sourceVideoRef.current.currentTime = nextTime;
+      }
+    },
+    [syncSeekAll],
+  );
+
+  const handleSyncRateChange = useCallback(
+    (event: ChangeEvent<HTMLSelectElement>) => {
+      const nextRate = Number(event.target.value);
+      setSyncPlaybackRate(nextRate);
+      syncSetRateAll(nextRate);
+    },
+    [syncSetRateAll],
+  );
+
+  useEffect(() => {
+    setSyncCurrentTime(0);
+    setSyncDuration(0);
+    setSyncPlaying(false);
+  }, [syncSourceVideoUrl, sample2dVideoUrl, sample3dVideoUrl]);
 
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -481,115 +601,152 @@ export default function DemoPage() {
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
               <h2 className="flex items-center gap-2 text-base font-bold text-zinc-800">
                 <Film size={18} />
-                训练可视化窗口
+                四联同步可视化
               </h2>
-              <div className="flex flex-wrap gap-2">
-                {([
-                  ['video', '素材视频', Film],
-                  ['pose2d', '2D骨架', Activity],
-                  ['pose3d', '3D骨架', Cuboid],
-                  ['curves', '训练曲线', ChartNoAxesColumn],
-                ] as [VisualTabKey, string, ComponentType<{ size?: number }>][])
-                  .map(([tabKey, label, Icon]) => {
-                    const active = visualTab === tabKey;
-                    return (
-                      <button
-                        key={tabKey}
-                        onClick={() => setVisualTab(tabKey)}
-                        className={`flex items-center gap-1 rounded-lg border px-3 py-1.5 text-sm font-semibold ${
-                          active
-                            ? 'border-zinc-900 bg-zinc-900 text-white'
-                            : 'border-zinc-200 bg-white text-zinc-600 hover:bg-stone-50'
-                        }`}
-                      >
-                        <Icon size={15} />
-                        {label}
-                      </button>
-                    );
-                  })}
+              <div className="flex items-center gap-2 text-xs text-zinc-500">
+                <span className="rounded-md border border-zinc-200 bg-stone-50 px-2 py-1">
+                  视频根目录：{sourcePreview?.video_root || '未检测到'}
+                </span>
+                <span className="rounded-md border border-zinc-200 bg-stone-50 px-2 py-1">
+                  {syncReady ? '同步模式：已就绪' : '同步模式：等待训练同步视频'}
+                </span>
               </div>
             </div>
 
-            {visualTab === 'video' && (
-              <div className="space-y-4">
-                <div className="rounded-lg border border-zinc-200 bg-stone-50 px-3 py-2 text-xs text-zinc-600">
-                  视频根目录：{sourcePreview?.video_root || '未检测到'}
-                </div>
-                {currentVideoUrl ? (
-                  <>
-                    <video
-                      key={currentVideo?.path}
-                      controls
-                      preload="metadata"
-                      src={currentVideoUrl}
-                      className="h-[410px] w-full rounded-xl border border-zinc-200 bg-black object-contain"
-                    />
-                    <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">
-                      {(sourcePreview?.samples || []).map((sample, index) => (
-                        <button
-                          key={sample.path}
-                          onClick={() => setSelectedVideoIndex(index)}
-                          className={`rounded-lg border px-3 py-2 text-left text-sm ${
-                            selectedVideoIndex === index
-                              ? 'border-zinc-900 bg-zinc-900 text-white'
-                              : 'border-zinc-200 bg-stone-50 text-zinc-700 hover:bg-stone-100'
-                          }`}
-                        >
-                          <p className="truncate font-semibold">{sample.name}</p>
-                          <p className={`text-xs ${selectedVideoIndex === index ? 'text-zinc-300' : 'text-zinc-500'}`}>
-                            {formatBytes(sample.size_bytes)}
-                          </p>
-                        </button>
-                      ))}
-                    </div>
-                  </>
+            <div className="mb-4 rounded-xl border border-zinc-200 bg-stone-50 px-4 py-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <Button size="sm" onClick={() => void handleSyncPlay()} disabled={!syncReady} className="h-9">
+                  播放
+                </Button>
+                <Button size="sm" variant="outline" onClick={handleSyncPause} disabled={!syncReady} className="h-9">
+                  暂停
+                </Button>
+                <select
+                  value={syncPlaybackRate}
+                  onChange={handleSyncRateChange}
+                  disabled={!syncReady}
+                  className="h-9 rounded-lg border border-zinc-200 bg-white px-2 text-sm"
+                >
+                  <option value={0.5}>0.5x</option>
+                  <option value={0.75}>0.75x</option>
+                  <option value={1}>1.0x</option>
+                  <option value={1.25}>1.25x</option>
+                  <option value={1.5}>1.5x</option>
+                </select>
+                <span className="ml-auto text-xs text-zinc-600">
+                  {formatClock(syncCurrentTime)} / {formatClock(syncDuration)}
+                  {syncPlaying ? '（播放中）' : '（暂停）'}
+                </span>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={syncDuration > 0 ? syncDuration : 1}
+                step={0.01}
+                value={Math.min(syncCurrentTime, syncDuration > 0 ? syncDuration : syncCurrentTime)}
+                onChange={handleSyncSeekInput}
+                disabled={!syncReady}
+                className="mt-3 h-2 w-full accent-zinc-900"
+              />
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 2xl:grid-cols-2">
+              <div className="rounded-xl border border-zinc-200 bg-stone-50 p-3">
+                <h3 className="mb-2 text-sm font-bold text-zinc-800">素材视频</h3>
+                {syncSourceVideoUrl ? (
+                  <video
+                    ref={sourceVideoRef}
+                    controls
+                    preload="metadata"
+                    src={syncSourceVideoUrl}
+                    onLoadedMetadata={(event) => handleSyncLoadedMetadata(event.currentTarget)}
+                    onTimeUpdate={(event) => handleSyncTimeUpdate(event.currentTarget)}
+                    onPlay={() => setSyncPlaying(true)}
+                    onPause={() => setSyncPlaying(false)}
+                    className="h-[300px] w-full rounded-lg border border-zinc-200 bg-black object-contain"
+                  />
                 ) : (
-                  <div className="flex h-[410px] items-center justify-center rounded-xl border border-dashed border-zinc-300 bg-stone-50 text-sm text-zinc-500">
-                    {previewLoading
-                      ? '正在加载素材预览...'
-                      : currentVideo
-                        ? '已发现样例文件，但当前路径未挂载为可预览 URL'
-                        : '当前数据集暂无可预览视频'}
+                  <div className="flex h-[300px] items-center justify-center rounded-lg border border-dashed border-zinc-300 bg-white text-sm text-zinc-500">
+                    {previewLoading ? '正在加载素材预览...' : '当前数据集暂无可预览视频'}
                   </div>
                 )}
+                <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
+                  {(sourcePreview?.samples || []).slice(0, 6).map((sample, index) => (
+                    <button
+                      key={sample.path}
+                      onClick={() => setSelectedVideoIndex(index)}
+                      className={`rounded-lg border px-3 py-2 text-left text-xs ${
+                        selectedVideoIndex === index
+                          ? 'border-zinc-900 bg-zinc-900 text-white'
+                          : 'border-zinc-200 bg-white text-zinc-700 hover:bg-stone-100'
+                      }`}
+                    >
+                      <p className="truncate font-semibold">{sample.name}</p>
+                      <p className={`${selectedVideoIndex === index ? 'text-zinc-300' : 'text-zinc-500'}`}>
+                        {formatBytes(sample.size_bytes)}
+                      </p>
+                    </button>
+                  ))}
+                </div>
               </div>
-            )}
 
-            {visualTab === 'pose2d' && (
-              <>
-                {artifactStatus?.sample_2d_exists ? (
-                  <img src={sample2dUrl} alt="训练2D样例" className="h-[410px] w-full rounded-xl border border-zinc-200 object-contain" />
+              <div className="rounded-xl border border-zinc-200 bg-stone-50 p-3">
+                <h3 className="mb-2 text-sm font-bold text-zinc-800">2D骨架</h3>
+                {sample2dVideoUrl ? (
+                  <video
+                    ref={pose2dVideoRef}
+                    controls
+                    preload="metadata"
+                    src={sample2dVideoUrl}
+                    onLoadedMetadata={(event) => handleSyncLoadedMetadata(event.currentTarget)}
+                    onTimeUpdate={(event) => handleSyncTimeUpdate(event.currentTarget)}
+                    onPlay={() => setSyncPlaying(true)}
+                    onPause={() => setSyncPlaying(false)}
+                    className="h-[300px] w-full rounded-lg border border-zinc-200 bg-black object-contain"
+                  />
+                ) : artifactStatus?.sample_2d_exists ? (
+                  <img src={sample2dUrl} alt="训练2D样例" className="h-[300px] w-full rounded-lg border border-zinc-200 bg-white object-contain" />
                 ) : (
-                  <div className="flex h-[410px] items-center justify-center rounded-xl border border-dashed border-zinc-300 bg-stone-50 text-sm text-zinc-500">
+                  <div className="flex h-[300px] items-center justify-center rounded-lg border border-dashed border-zinc-300 bg-white text-sm text-zinc-500">
                     暂无 2D 样例，请先执行训练任务
                   </div>
                 )}
-              </>
-            )}
+              </div>
 
-            {visualTab === 'pose3d' && (
-              <>
-                {artifactStatus?.sample_3d_exists ? (
-                  <iframe title="训练3D样例" src={sample3dUrl} className="h-[410px] w-full rounded-xl border border-zinc-200 bg-white" />
+              <div className="rounded-xl border border-zinc-200 bg-stone-50 p-3">
+                <h3 className="mb-2 text-sm font-bold text-zinc-800">3D骨架</h3>
+                {sample3dVideoUrl ? (
+                  <video
+                    ref={pose3dVideoRef}
+                    controls
+                    preload="metadata"
+                    src={sample3dVideoUrl}
+                    onLoadedMetadata={(event) => handleSyncLoadedMetadata(event.currentTarget)}
+                    onTimeUpdate={(event) => handleSyncTimeUpdate(event.currentTarget)}
+                    onPlay={() => setSyncPlaying(true)}
+                    onPause={() => setSyncPlaying(false)}
+                    className="h-[300px] w-full rounded-lg border border-zinc-200 bg-black object-contain"
+                  />
+                ) : artifactStatus?.sample_3d_exists ? (
+                  <iframe title="训练3D样例" src={sample3dUrl} className="h-[300px] w-full rounded-lg border border-zinc-200 bg-white" />
                 ) : (
-                  <div className="flex h-[410px] items-center justify-center rounded-xl border border-dashed border-zinc-300 bg-stone-50 text-sm text-zinc-500">
+                  <div className="flex h-[300px] items-center justify-center rounded-lg border border-dashed border-zinc-300 bg-white text-sm text-zinc-500">
                     暂无 3D 样例，请先执行训练任务
                   </div>
                 )}
-              </>
-            )}
+              </div>
 
-            {visualTab === 'curves' && (
-              <>
+              <div className="rounded-xl border border-zinc-200 bg-stone-50 p-3">
+                <h3 className="mb-2 text-sm font-bold text-zinc-800">训练曲线</h3>
                 {artifactStatus?.curves_exists ? (
-                  <iframe title="训练曲线" src={curvesUrl} className="h-[410px] w-full rounded-xl border border-zinc-200 bg-white" />
+                  <iframe title="训练曲线" src={curvesUrl} className="h-[300px] w-full rounded-lg border border-zinc-200 bg-white" />
                 ) : (
-                  <div className="flex h-[410px] items-center justify-center rounded-xl border border-dashed border-zinc-300 bg-stone-50 text-sm text-zinc-500">
+                  <div className="flex h-[300px] items-center justify-center rounded-lg border border-dashed border-zinc-300 bg-white text-sm text-zinc-500">
                     暂无训练曲线，请先执行训练任务
                   </div>
                 )}
-              </>
-            )}
+              </div>
+            </div>
           </div>
 
           <section className="grid grid-cols-1 gap-6 2xl:grid-cols-2">

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -13,7 +14,7 @@ import numpy as np
 import torch
 
 from posementor.utils.io import ensure_dir
-from posementor.utils.joints import JOINT_NAMES
+from posementor.utils.joints import JOINT_NAMES, SKELETON_EDGES
 from posementor.utils.visualize import build_3d_skeleton_figure, draw_pose_2d
 
 
@@ -45,7 +46,7 @@ class TrainingVisualizationCallback(Callback):
         self.history: list[EpochMetrics] = []
         self.mean_2d = mean_2d.astype(np.float32) if mean_2d is not None else None
         self.std_2d = std_2d.astype(np.float32) if std_2d is not None else None
-        self.cached_batch: dict[str, torch.Tensor] | None = None
+        self.cached_batch: dict[str, Any] | None = None
 
     @staticmethod
     def _to_float(value: Any) -> float | None:
@@ -166,10 +167,22 @@ class TrainingVisualizationCallback(Callback):
             return
         if self.cached_batch is not None:
             return
+
+        seq_ids = batch.get("seq_id", [])
+        start_idx = batch.get("start_idx")
+        video_paths = batch.get("video_path", [])
+        if isinstance(start_idx, torch.Tensor):
+            first_start_idx = int(start_idx[0].item())
+        else:
+            first_start_idx = int(start_idx[0]) if start_idx else 0
+
         self.cached_batch = {
             "kp2d": batch["kp2d"][:1].detach().cpu(),
             "conf": batch["conf"][:1].detach().cpu(),
             "gt3d": batch["gt3d"][:1].detach().cpu(),
+            "seq_id": str(seq_ids[0]) if seq_ids else "",
+            "start_idx": first_start_idx,
+            "video_path": str(video_paths[0]) if video_paths else "",
         }
 
     def _denorm_kp2d(self, kp2d: np.ndarray) -> np.ndarray:
@@ -197,6 +210,231 @@ class TrainingVisualizationCallback(Callback):
         fitted = (fitted - min_xy) * scale + margin
         return fitted
 
+    @staticmethod
+    def _project_3d(points3d: np.ndarray) -> np.ndarray:
+        yaw = np.deg2rad(35.0)
+        pitch = np.deg2rad(18.0)
+        rot_y = np.array(
+            [
+                [np.cos(yaw), 0.0, np.sin(yaw)],
+                [0.0, 1.0, 0.0],
+                [-np.sin(yaw), 0.0, np.cos(yaw)],
+            ],
+            dtype=np.float32,
+        )
+        rot_x = np.array(
+            [
+                [1.0, 0.0, 0.0],
+                [0.0, np.cos(pitch), -np.sin(pitch)],
+                [0.0, np.sin(pitch), np.cos(pitch)],
+            ],
+            dtype=np.float32,
+        )
+        root = (points3d[11] + points3d[12]) * 0.5
+        centered = points3d - root[None, :]
+        rotated = centered @ rot_y.T @ rot_x.T
+        return rotated[:, :2].astype(np.float32)
+
+    @staticmethod
+    def _normalize_2d(
+        points2d: np.ndarray,
+        min_xy: np.ndarray,
+        max_xy: np.ndarray,
+        width: int,
+        height: int,
+    ) -> np.ndarray:
+        margin = 42.0
+        span = np.maximum(max_xy - min_xy, 1.0)
+        scale_x = (width - margin * 2.0) / span[0]
+        scale_y = (height - margin * 2.0) / span[1]
+        scale = float(min(scale_x, scale_y))
+        normalized = (points2d - min_xy[None, :]) * scale + margin
+        normalized[:, 1] = float(height) - normalized[:, 1]
+        return normalized
+
+    @staticmethod
+    def _draw_pose_3d_panel(
+        pred_points: np.ndarray,
+        ref_points: np.ndarray,
+        min_xy: np.ndarray,
+        max_xy: np.ndarray,
+        width: int,
+        height: int,
+        epoch: int,
+        frame_idx: int,
+    ) -> np.ndarray:
+        canvas = np.full((height, width, 3), 246, dtype=np.uint8)
+        pred_xy = TrainingVisualizationCallback._normalize_2d(pred_points, min_xy, max_xy, width, height)
+        ref_xy = TrainingVisualizationCallback._normalize_2d(ref_points, min_xy, max_xy, width, height)
+
+        for a, b in SKELETON_EDGES:
+            pa_ref = tuple(np.round(ref_xy[a]).astype(int).tolist())
+            pb_ref = tuple(np.round(ref_xy[b]).astype(int).tolist())
+            cv2.line(canvas, pa_ref, pb_ref, (64, 83, 199), 3, lineType=cv2.LINE_AA)
+
+        for a, b in SKELETON_EDGES:
+            pa = tuple(np.round(pred_xy[a]).astype(int).tolist())
+            pb = tuple(np.round(pred_xy[b]).astype(int).tolist())
+            cv2.line(canvas, pa, pb, (24, 133, 86), 3, lineType=cv2.LINE_AA)
+
+        cv2.putText(
+            canvas,
+            f"3D Pred (green) vs GT (blue) | epoch={epoch} frame={frame_idx}",
+            (20, 34),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (24, 24, 24),
+            2,
+            lineType=cv2.LINE_AA,
+        )
+        return canvas
+
+    @staticmethod
+    def _read_video_clip(video_path: str, start_idx: int, frame_count: int) -> tuple[list[np.ndarray], float]:
+        if not video_path:
+            return [], 25.0
+        path = Path(video_path)
+        if not path.exists():
+            return [], 25.0
+
+        cap = cv2.VideoCapture(str(path))
+        if not cap.isOpened():
+            return [], 25.0
+
+        fps = float(cap.get(cv2.CAP_PROP_FPS) or 25.0)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, max(start_idx, 0))
+
+        frames: list[np.ndarray] = []
+        for _ in range(frame_count):
+            ok, frame = cap.read()
+            if not ok:
+                break
+            frames.append(frame)
+        cap.release()
+        return frames, fps
+
+    @staticmethod
+    def _write_mp4(path: Path, frames: list[np.ndarray], fps: float) -> None:
+        if not frames:
+            return
+        height, width = frames[0].shape[:2]
+        writer = cv2.VideoWriter(
+            str(path),
+            cv2.VideoWriter_fourcc(*"mp4v"),
+            max(1.0, fps),
+            (width, height),
+        )
+        for frame in frames:
+            writer.write(frame)
+        writer.release()
+
+    def _write_sync_videos(
+        self,
+        epoch: int,
+        seq_id: str,
+        start_idx: int,
+        video_path: str,
+        kp2d: np.ndarray,
+        conf: np.ndarray,
+        pred3d: np.ndarray,
+        gt3d: np.ndarray,
+    ) -> None:
+        frame_count = int(kp2d.shape[0])
+        source_frames, source_fps = self._read_video_clip(video_path=video_path, start_idx=start_idx, frame_count=frame_count)
+        has_source_video = len(source_frames) > 0
+
+        if has_source_video:
+            height, width = source_frames[0].shape[:2]
+        else:
+            width, height = 960, 540
+            source_frames = [np.full((height, width, 3), 244, dtype=np.uint8) for _ in range(frame_count)]
+
+        while len(source_frames) < frame_count:
+            source_frames.append(source_frames[-1].copy())
+        source_frames = source_frames[:frame_count]
+
+        source_frames_draw: list[np.ndarray] = []
+        pose2d_frames: list[np.ndarray] = []
+
+        projected_pred = np.stack([self._project_3d(pred3d[i]) for i in range(frame_count)], axis=0)
+        projected_gt = np.stack([self._project_3d(gt3d[i]) for i in range(frame_count)], axis=0)
+        all_projected = np.concatenate([projected_pred.reshape(-1, 2), projected_gt.reshape(-1, 2)], axis=0)
+        min_xy = np.nanmin(all_projected, axis=0)
+        max_xy = np.nanmax(all_projected, axis=0)
+        pose3d_frames: list[np.ndarray] = []
+
+        for frame_idx in range(frame_count):
+            base_source = source_frames[frame_idx].copy()
+            cv2.putText(
+                base_source,
+                f"{seq_id} frame={start_idx + frame_idx}",
+                (20, 34),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.8,
+                (235, 235, 235),
+                2,
+                lineType=cv2.LINE_AA,
+            )
+            source_frames_draw.append(base_source)
+
+            kp2d_frame = self._denorm_kp2d(kp2d[frame_idx])
+            conf_frame = conf[frame_idx]
+            kp2d_draw = np.concatenate([kp2d_frame, conf_frame], axis=-1).astype(np.float32)
+            if not has_source_video:
+                kp2d_draw[:, :2] = self._fit_points_to_canvas(kp2d_draw[:, :2], kp2d_draw[:, 2:3])
+            pose2d_canvas = draw_pose_2d(source_frames[frame_idx].copy(), kp2d_draw, conf_thres=0.05)
+            cv2.putText(
+                pose2d_canvas,
+                f"2D Skeleton | epoch={epoch} frame={start_idx + frame_idx}",
+                (20, 34),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.72,
+                (24, 24, 24),
+                2,
+                lineType=cv2.LINE_AA,
+            )
+            pose2d_frames.append(pose2d_canvas)
+
+            pose3d_canvas = self._draw_pose_3d_panel(
+                pred_points=projected_pred[frame_idx],
+                ref_points=projected_gt[frame_idx],
+                min_xy=min_xy,
+                max_xy=max_xy,
+                width=width,
+                height=height,
+                epoch=epoch,
+                frame_idx=start_idx + frame_idx,
+            )
+            pose3d_frames.append(pose3d_canvas)
+
+        source_latest = self.sample_dir / "sample_video_latest.mp4"
+        source_epoch = self.sample_dir / f"sample_video_epoch_{epoch:03d}.mp4"
+        self._write_mp4(source_latest, source_frames_draw, source_fps)
+        self._write_mp4(source_epoch, source_frames_draw, source_fps)
+
+        pose2d_latest = self.sample_dir / "sample_2d_latest.mp4"
+        pose2d_epoch = self.sample_dir / f"sample_2d_epoch_{epoch:03d}.mp4"
+        self._write_mp4(pose2d_latest, pose2d_frames, source_fps)
+        self._write_mp4(pose2d_epoch, pose2d_frames, source_fps)
+
+        pose3d_latest = self.sample_dir / "sample_3d_latest.mp4"
+        pose3d_epoch = self.sample_dir / f"sample_3d_epoch_{epoch:03d}.mp4"
+        self._write_mp4(pose3d_latest, pose3d_frames, source_fps)
+        self._write_mp4(pose3d_epoch, pose3d_frames, source_fps)
+
+        sync_meta = {
+            "seq_id": seq_id,
+            "start_frame": start_idx,
+            "frame_count": frame_count,
+            "fps": source_fps,
+            "has_source_video": has_source_video,
+            "video_path": video_path,
+        }
+        (self.sample_dir / "sample_sync_meta_latest.json").write_text(
+            json.dumps(sync_meta, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
     def _write_sample_visualization(self, trainer, pl_module) -> None:
         if self.cached_batch is None:
             return
@@ -205,6 +443,9 @@ class TrainingVisualizationCallback(Callback):
         kp2d_t = self.cached_batch["kp2d"]
         conf_t = self.cached_batch["conf"]
         gt3d_t = self.cached_batch["gt3d"]
+        seq_id = str(self.cached_batch.get("seq_id", ""))
+        start_idx = int(self.cached_batch.get("start_idx", 0))
+        video_path = str(self.cached_batch.get("video_path", ""))
 
         with torch.no_grad():
             pred3d_t = pl_module(kp2d_t.to(pl_module.device)).detach().cpu()
@@ -255,6 +496,17 @@ class TrainingVisualizationCallback(Callback):
         ]
         lines.extend([f"- {JOINT_NAMES[i]}: {float(error[i]):.4f}" for i in rank])
         summary_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        self._write_sync_videos(
+            epoch=epoch,
+            seq_id=seq_id,
+            start_idx=start_idx,
+            video_path=video_path,
+            kp2d=kp2d,
+            conf=conf,
+            pred3d=pred3d,
+            gt3d=gt3d,
+        )
 
     def on_validation_epoch_end(self, trainer, pl_module) -> None:  # type: ignore[override]
         if trainer.sanity_checking:

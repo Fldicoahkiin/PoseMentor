@@ -57,6 +57,12 @@ pnpm dev --host 127.0.0.1 --port 7860
 lsof -i :7860
 ```
 
+- 清理历史前端进程（旧版 UI / 端口漂移）：
+
+```bash
+uv run posementor cleanup
+```
+
 ## 4. `找不到 3D lift 权重: artifacts/lift_demo.ckpt`
 
 现象：

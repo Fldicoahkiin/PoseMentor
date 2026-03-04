@@ -22,3 +22,9 @@ def test_cli_supports_install_launchers_command() -> None:
     parser = build_parser()
     args = parser.parse_args(["install-launchers"])
     assert args.command == "install-launchers"
+
+
+def test_cli_supports_cleanup_command() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["cleanup"])
+    assert args.command == "cleanup"

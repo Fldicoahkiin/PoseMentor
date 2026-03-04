@@ -15,9 +15,10 @@ class SequencePair:
     style: str
     kp2d: np.ndarray  # [T, 17, 3]
     gt3d: np.ndarray  # [T, 17, 3]
+    video_path: Path | None = None
 
 
-class AISTLiftDataset(Dataset[dict[str, torch.Tensor]]):
+class AISTLiftDataset(Dataset[dict[str, object]]):
     def __init__(
         self,
         pairs: list[SequencePair],
@@ -44,7 +45,7 @@ class AISTLiftDataset(Dataset[dict[str, torch.Tensor]]):
     def __len__(self) -> int:
         return len(self.indices)
 
-    def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
+    def __getitem__(self, index: int) -> dict[str, object]:
         pair_idx, st = self.indices[index]
         pair = self.pairs[pair_idx]
 
@@ -64,6 +65,9 @@ class AISTLiftDataset(Dataset[dict[str, torch.Tensor]]):
             "kp2d": torch.from_numpy(kp2d),
             "conf": torch.from_numpy(conf),
             "gt3d": torch.from_numpy(gt3d),
+            "seq_id": pair.seq_id,
+            "start_idx": torch.tensor(st, dtype=torch.int64),
+            "video_path": str(pair.video_path) if pair.video_path is not None else "",
         }
 
 
@@ -78,6 +82,7 @@ def load_sequence_pairs(
     gt_dir: Path,
     val_ratio: float,
     split: str,
+    videos_root: Path | None = None,
 ) -> list[SequencePair]:
     assert split in {"train", "val"}
     pairs: list[SequencePair] = []
@@ -100,6 +105,12 @@ def load_sequence_pairs(
         with np.load(gt_files[seq_id]) as g_data:
             gt3d = g_data["joints3d"].astype(np.float32)
 
+        video_path: Path | None = None
+        if videos_root is not None:
+            candidate = videos_root / f"{seq_id}.mp4"
+            if candidate.exists():
+                video_path = candidate
+
         frames = min(len(kp2d), len(gt3d))
         if frames < 24:
             continue
@@ -110,6 +121,7 @@ def load_sequence_pairs(
                 style=style,
                 kp2d=kp2d[:frames],
                 gt3d=gt3d[:frames],
+                video_path=video_path,
             )
         )
 
