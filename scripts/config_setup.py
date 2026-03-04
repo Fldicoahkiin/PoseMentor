@@ -4,7 +4,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from posementor.local_config import init_local_config
+from posementor.local_config import init_local_config, upsert_local_config
 
 
 def parse_args() -> argparse.Namespace:
@@ -18,6 +18,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--frontend-port", type=int, default=7860)
     parser.add_argument("--dataset-id", default="aistpp")
     parser.add_argument("--standard-id", default="private_action_core")
+    parser.add_argument("--aist-video-profile", default="mv3_quick")
     return parser.parse_args()
 
 
@@ -31,12 +32,19 @@ def main() -> None:
         "network.frontend_port": args.frontend_port,
         "defaults.dataset_id": args.dataset_id,
         "defaults.standard_id": args.standard_id,
+        "defaults.aist_video_profile": args.aist_video_profile,
     }
-    path, created = init_local_config(
-        config_path=Path(args.config_path),
-        force=args.force,
-        overrides=overrides,
-    )
+    if args.force:
+        path, created = init_local_config(
+            config_path=Path(args.config_path),
+            force=True,
+            overrides=overrides,
+        )
+    else:
+        path, created = upsert_local_config(
+            config_path=Path(args.config_path),
+            overrides=overrides,
+        )
     print(f"[DONE] 配置文件{'已创建' if created else '已存在'}: {path}")
 
 

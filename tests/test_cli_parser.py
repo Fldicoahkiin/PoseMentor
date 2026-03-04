@@ -18,10 +18,12 @@ def test_cli_supports_quickstart_up_flag() -> None:
     assert args.up is True
 
 
-def test_cli_supports_install_launchers_command() -> None:
+def test_cli_supports_config_profile_and_download_flag() -> None:
     parser = build_parser()
-    args = parser.parse_args(["install-launchers"])
-    assert args.command == "install-launchers"
+    args = parser.parse_args(["config", "--plain", "--aist-video-profile", "mv5_standard", "--download-now"])
+    assert args.command == "config"
+    assert args.aist_video_profile == "mv5_standard"
+    assert args.download_now is True
 
 
 def test_cli_supports_cleanup_command() -> None:

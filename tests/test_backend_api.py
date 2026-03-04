@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 from fastapi.testclient import TestClient
 
 import backend_api
@@ -81,6 +82,76 @@ def test_workspace_source_preview_route() -> None:
     payload = response.json()
     assert payload["dataset_id"] == "aistpp"
     assert "samples" in payload
+
+
+def test_workspace_pose_preview_route(monkeypatch, tmp_path: Path) -> None:
+    project_root = tmp_path / "workspace"
+    data_root = project_root / "data"
+    output_root = project_root / "outputs"
+    video_file = data_root / "raw" / "aistpp" / "videos" / "demo_clip.mp4"
+    video_file.parent.mkdir(parents=True, exist_ok=True)
+    video_file.write_bytes(b"fake-mp4")
+
+    yolo_dir = project_root / "pose" / "yolo2d"
+    gt_dir = project_root / "pose" / "gt3d"
+    yolo_dir.mkdir(parents=True, exist_ok=True)
+    gt_dir.mkdir(parents=True, exist_ok=True)
+
+    np.savez(
+        yolo_dir / "gBR_sBM_cAll_d04_mBR0_ch01.npz",
+        keypoints2d=np.zeros((12, 17, 3), dtype=np.float32),
+        source_video_name=np.asarray([video_file.name]),
+    )
+    np.savez(
+        gt_dir / "gBR_sBM_cAll_d04_mBR0_ch01.npz",
+        joints3d=np.zeros((12, 17, 3), dtype=np.float32),
+    )
+
+    monkeypatch.setattr(backend_api, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(backend_api, "DATA_ROOT", data_root)
+    monkeypatch.setattr(backend_api, "OUTPUT_ROOT", output_root)
+    monkeypatch.setattr(backend_api, "_assert_dataset_exists", lambda _: None)
+    monkeypatch.setattr(
+        backend_api,
+        "_find_dataset",
+        lambda _: {
+            "id": "aistpp",
+            "name": "AIST++",
+            "stage": "production",
+            "mode": "singleview",
+            "data_config": "",
+            "train_config": "",
+            "video_root": "data/raw/aistpp/videos",
+            "notes": "",
+        },
+    )
+    monkeypatch.setattr(
+        backend_api,
+        "_resolve_pose_dirs_from_dataset",
+        lambda _: (yolo_dir, gt_dir),
+    )
+
+    def fake_renderer(**kwargs):
+        kwargs["output_2d"].write_bytes(b"2d")
+        kwargs["output_3d"].write_bytes(b"3d")
+        return {"fps": 30.0, "frames": 12.0}
+
+    monkeypatch.setattr(backend_api, "render_pose_preview_videos", fake_renderer)
+
+    response = client.get(
+        "/workspace/pose-preview",
+        params={
+            "dataset_id": "aistpp",
+            "video_path": "data/raw/aistpp/videos/demo_clip.mp4",
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["dataset_id"] == "aistpp"
+    assert payload["seq_id"] == "gBR_sBM_cAll_d04_mBR0_ch01"
+    assert payload["source_video_url"].endswith("raw/aistpp/videos/demo_clip.mp4")
+    assert payload["pose2d_video_url"].endswith("demo_clip_pose2d.mp4")
+    assert payload["pose3d_video_url"].endswith("demo_clip_pose3d.mp4")
 
 
 def test_job_progress_route_not_found() -> None:

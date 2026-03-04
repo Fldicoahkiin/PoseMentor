@@ -2,48 +2,38 @@
 
 ## 0. 快速模式（推荐）
 
-### macOS
+统一脚本入口（macOS / Windows / Linux 都一致）：
 
 ```bash
-cd /Users/mac/WorkSpace/Python_Project/posementor
-uv run python scripts/config_setup.py
-uv run posementor init
-uv run posementor quickstart --epochs 1 --export-onnx --up
+cd <project_root>
+./pm config
+./pm init
+./pm quickstart --epochs 1 --export-onnx --up
 ```
 
-`init` 后可直接：
-
-```bash
-./posementor config
-./posementor doctor
-./posementor quickstart --epochs 1 --up
-```
-
-### Windows
+Windows PowerShell：
 
 ```powershell
-cd C:\path\to\posementor
-uv run python scripts/config_setup.py
-uv run posementor init
-uv run posementor quickstart --epochs 1 --export-onnx --up
-```
-
-`init` 后可直接：
-
-```powershell
-posementor.exe config
-posementor.exe doctor
-posementor.exe quickstart --epochs 1 --up
+cd <project_root>
+.\pm.ps1 config
+.\pm.ps1 init
+.\pm.ps1 quickstart --epochs 1 --export-onnx --up
 ```
 
 常用管理命令：
 
 ```bash
-uv run posementor doctor
-uv run posementor status
-uv run posementor logs --service all --lines 120
-uv run posementor down
+./pm doctor
+./pm status
+./pm logs --service all --lines 120
+./pm down
 ```
+
+`config` 会进入交互式 UI，可直接选择多机位下载 Profile：
+- `mv3_quick`：c01,c02,c03 × 40 组
+- `mv5_standard`：c01~c05 × 80 组
+- `mv9_core`：c01~c09 × 120 组
+- `mv9_full`：c01~c09 全量
 
 ## 1. 前置依赖
 
@@ -87,10 +77,18 @@ AIST++ 官方文件：
 uv run python download_and_prepare_aist.py --config configs/data.yaml --download --extract
 ```
 
+脚本会自动识别 `annotations` 下的实际 3D 标注目录（含嵌套目录场景），无需手动搬运文件。
+
 可选：下载部分视频（需显式同意协议）
 
 ```bash
-uv run python download_and_prepare_aist.py --config configs/data.yaml --download-videos --video-limit 120 --agree-aist-license --skip-preprocess
+uv run python download_and_prepare_aist.py --config configs/data.yaml --download-videos --group-limit 40 --camera-ids c01,c02,c03 --min-cameras-per-group 3 --agree-aist-license --skip-preprocess
+```
+
+全机位（c01~c09）全量下载：
+
+```bash
+uv run python download_and_prepare_aist.py --config configs/data.yaml --download-videos --group-limit 0 --camera-ids c01,c02,c03,c04,c05,c06,c07,c08,c09 --min-cameras-per-group 9 --agree-aist-license --skip-preprocess
 ```
 
 可选：验证 3D 标注文件数量（fullset 应为 1408）
@@ -118,11 +116,12 @@ uv run python extract_pose_aist2d.py --config configs/data.yaml --camera-index 1
 
 ## 数据集本地管理
 
-- 前端入口：`http://127.0.0.1:7860/admin` → `数据集管理`
+- 前端入口：`http://127.0.0.1:7860/` → `训练数据集` 下拉
 - 注册文件：`configs/datasets.yaml`
-- 新增自采数据时，优先配置 `video_root` 为本地目录：
-  - 单视角：`data/raw/custom_singleview/videos`
+- 当前仅保留两类数据源：
+  - AIST++：`data/raw/aistpp/videos`
   - 四机位：`data/raw/multiview`
+- 新增四机位素材时，按 `configs/multiview.yaml` 目录结构放置。
 - 后端接口：`POST /datasets/upsert`
 
 ## 5. 训练 3D Lift
@@ -180,10 +179,10 @@ uv run posementor cleanup
 常用服务命令：
 
 ```bash
-./posementor start
-./posementor status
-./posementor stop
-./posementor restart
+./pm start
+./pm status
+./pm stop
+./pm restart
 ```
 
 ## 7. 快速验证
@@ -231,19 +230,16 @@ uv run python visualize_multiview_report.py --manifest data/processed/multiview/
 ## 9. CLI 一体化命令
 
 ```bash
-uv run posementor config --force
-uv run posementor init
-uv run posementor quickstart --epochs 1 --export-onnx --up
-uv run posementor status
-uv run posementor logs --service backend_api --lines 120
-uv run posementor down
+./pm config
+./pm config --plain --force --download-now
+./pm init
+./pm quickstart --download-videos --video-profile mv5_standard --epochs 1 --export-onnx --up
+./pm status
+./pm logs --service backend_api --lines 120
+./pm down
 
-./posementor status
-./posementor logs --service all --lines 120
-
-uv run python posementor_cli.py prepare-aist --config configs/data.yaml --download --extract
-uv run python posementor_cli.py extract-aist2d --config configs/data.yaml
-uv run python posementor_cli.py train-lift --config configs/train.yaml --epochs 2
+uv run posementor config
+uv run posementor quickstart --download-videos --video-profile mv9_core --epochs 1
 ```
 
 ## 10. 自定义数据集扩展位（预留）

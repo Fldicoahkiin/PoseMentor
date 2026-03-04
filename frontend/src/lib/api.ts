@@ -76,6 +76,16 @@ export type SourcePreviewPayload = {
   samples: SourcePreviewItem[];
 };
 
+export type PosePreviewPayload = {
+  dataset_id: string;
+  seq_id: string;
+  source_video_url: string;
+  pose2d_video_url: string;
+  pose3d_video_url: string;
+  fps: number;
+  frames: number;
+};
+
 export type ArtifactManifestItem = {
   name: string;
   path: string;
@@ -158,6 +168,14 @@ export async function fetchArtifactManifest(limit = 200) {
 export async function fetchSourcePreview(datasetId: string, limit = 4) {
   const { data } = await client.get<SourcePreviewPayload>("/workspace/source-preview", {
     params: { dataset_id: datasetId, limit },
+  });
+  return data;
+}
+
+export async function fetchPosePreview(datasetId: string, videoPath: string) {
+  const { data } = await client.get<PosePreviewPayload>("/workspace/pose-preview", {
+    params: { dataset_id: datasetId, video_path: videoPath },
+    timeout: 60000,
   });
   return data;
 }

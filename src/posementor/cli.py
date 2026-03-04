@@ -14,7 +14,7 @@ from http.client import HTTPConnection
 from pathlib import Path
 from typing import Any
 
-from posementor.local_config import init_local_config, load_local_config
+from posementor.local_config import init_local_config, load_local_config, upsert_local_config
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 LOCAL_CONFIG_FILE = PROJECT_ROOT / "configs" / "local.yaml"
@@ -22,6 +22,37 @@ BACKEND_SERVICE = "backend_api"
 FRONTEND_SERVICE = "frontend"
 LEGACY_FRONTEND_PATTERNS = ("app_demo.py", "admin_console.py")
 VITE_PORT_PATTERN = re.compile(r"--port\s+(\d+)")
+VIDEO_CAMERA_PATTERN = re.compile(r"_c(\d+)_", re.IGNORECASE)
+AIST_VIDEO_PROFILES: dict[str, dict[str, Any]] = {
+    "mv3_quick": {
+        "name": "三机位快速包",
+        "camera_ids": ["c01", "c02", "c03"],
+        "group_limit": 40,
+        "min_cameras_per_group": 3,
+        "description": "3 机位 × 40 动作组，适合快速联调。",
+    },
+    "mv5_standard": {
+        "name": "五机位标准包",
+        "camera_ids": ["c01", "c02", "c03", "c04", "c05"],
+        "group_limit": 80,
+        "min_cameras_per_group": 5,
+        "description": "5 机位 × 80 动作组，平衡效果与体量。",
+    },
+    "mv9_core": {
+        "name": "九机位核心包",
+        "camera_ids": ["c01", "c02", "c03", "c04", "c05", "c06", "c07", "c08", "c09"],
+        "group_limit": 120,
+        "min_cameras_per_group": 9,
+        "description": "9 机位 × 120 动作组，完整多机位训练基线。",
+    },
+    "mv9_full": {
+        "name": "九机位全量包",
+        "camera_ids": ["c01", "c02", "c03", "c04", "c05", "c06", "c07", "c08", "c09"],
+        "group_limit": 0,
+        "min_cameras_per_group": 9,
+        "description": "9 机位全量下载，耗时长，适合长期训练。",
+    },
+}
 
 
 def _run_python_script(script: str, extra_args: list[str]) -> int:
@@ -31,46 +62,214 @@ def _run_python_script(script: str, extra_args: list[str]) -> int:
     return result.returncode
 
 
-def _launcher_shell_text() -> str:
-    return """#!/usr/bin/env sh
-set -e
-
-SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-
-if [ -x "$SCRIPT_DIR/.venv/bin/posementor" ]; then
-  exec "$SCRIPT_DIR/.venv/bin/posementor" "$@"
-fi
-
-if command -v python3 >/dev/null 2>&1; then
-  exec python3 "$SCRIPT_DIR/posementor_cli.py" "$@"
-fi
-
-exec python "$SCRIPT_DIR/posementor_cli.py" "$@"
-"""
-
-
-def _launcher_cmd_text() -> str:
-    return """@echo off
-set SCRIPT_DIR=%~dp0
-
-if exist "%SCRIPT_DIR%.venv\\Scripts\\posementor.exe" (
-  "%SCRIPT_DIR%.venv\\Scripts\\posementor.exe" %*
-  exit /b %errorlevel%
-)
-
-if exist "%SCRIPT_DIR%.venv\\Scripts\\python.exe" (
-  "%SCRIPT_DIR%.venv\\Scripts\\python.exe" "%SCRIPT_DIR%posementor_cli.py" %*
-  exit /b %errorlevel%
-)
-
-python "%SCRIPT_DIR%posementor_cli.py" %*
-"""
-
-
 def _run_command(command: list[str], cwd: Path | None = None, env: dict[str, str] | None = None) -> int:
     print(f"[CMD] {' '.join(command)}")
     result = subprocess.run(command, cwd=cwd, env=env, check=False)  # noqa: S603
     return result.returncode
+
+
+def _video_group_key(stem: str) -> str:
+    return VIDEO_CAMERA_PATTERN.sub("_cAll_", stem)
+
+
+def _video_camera_id(stem: str) -> str:
+    matched = VIDEO_CAMERA_PATTERN.search(stem)
+    if not matched:
+        return ""
+    return f"c{int(matched.group(1)):02d}"
+
+
+def _inspect_aist_videos(video_root: Path) -> dict[str, Any]:
+    files = sorted(video_root.rglob("*.mp4")) if video_root.exists() else []
+    camera_set: set[str] = set()
+    group_set: set[str] = set()
+    for path in files:
+        stem = path.stem
+        camera_id = _video_camera_id(stem)
+        if camera_id:
+            camera_set.add(camera_id)
+        group_set.add(_video_group_key(stem))
+    return {
+        "video_root": str(video_root),
+        "file_count": len(files),
+        "group_count": len(group_set),
+        "camera_ids": sorted(camera_set),
+    }
+
+
+def _profile_target_count(profile_id: str) -> str:
+    profile = AIST_VIDEO_PROFILES[profile_id]
+    group_limit = int(profile["group_limit"])
+    camera_count = len(profile["camera_ids"])
+    if group_limit <= 0:
+        return f"all x {camera_count} 机位"
+    return str(group_limit * camera_count)
+
+
+def _profile_satisfied(stats: dict[str, Any], profile_id: str) -> bool:
+    profile = AIST_VIDEO_PROFILES[profile_id]
+    cameras = set(stats.get("camera_ids", []))
+    required = set(profile["camera_ids"])
+    if not required.issubset(cameras):
+        return False
+    group_limit = int(profile["group_limit"])
+    if group_limit <= 0:
+        return stats.get("group_count", 0) > 0
+    return int(stats.get("group_count", 0)) >= group_limit
+
+
+def _print_profile_table(stats: dict[str, Any], current_profile_id: str) -> None:
+    print("\n=== AIST 多机位下载配置 ===")
+    print("编号  Profile         机位              目标视频量     当前状态")
+    for idx, profile_id in enumerate(AIST_VIDEO_PROFILES.keys(), start=1):
+        profile = AIST_VIDEO_PROFILES[profile_id]
+        camera_text = ",".join(profile["camera_ids"])
+        target = _profile_target_count(profile_id)
+        ok_text = "已满足" if _profile_satisfied(stats, profile_id) else "待下载"
+        mark = "*" if profile_id == current_profile_id else " "
+        print(
+            f"{mark}{idx:<2}  {profile_id:<13} {camera_text:<17} {target:<12} {ok_text}"
+        )
+        print(f"     {profile['description']}")
+
+
+def _prompt_yes_no(title: str, *, default: bool = True) -> bool:
+    default_text = "Y/n" if default else "y/N"
+    while True:
+        raw = input(f"{title} [{default_text}]: ").strip().lower()
+        if not raw:
+            return default
+        if raw in {"y", "yes"}:
+            return True
+        if raw in {"n", "no"}:
+            return False
+        print("[WARN] 请输入 y 或 n")
+
+
+def _prompt_choice(title: str, options: list[str], *, default_index: int = 0) -> str:
+    print(f"\n{title}")
+    for idx, option in enumerate(options, start=1):
+        mark = "*" if idx - 1 == default_index else " "
+        print(f" {mark} {idx}. {option}")
+    while True:
+        raw = input(f"输入编号 [默认 {default_index + 1}]: ").strip()
+        if not raw:
+            return options[default_index]
+        if raw.isdigit():
+            value = int(raw)
+            if 1 <= value <= len(options):
+                return options[value - 1]
+        print("[WARN] 编号无效，请重新输入")
+
+
+def _prompt_int(title: str, *, default: int) -> int:
+    while True:
+        raw = input(f"{title} [默认 {default}]: ").strip()
+        if not raw:
+            return default
+        if raw.isdigit():
+            return int(raw)
+        print("[WARN] 请输入数字")
+
+
+def _bootstrap_tools(auto_install: bool) -> tuple[bool, list[str]]:
+    rows: list[str] = []
+    ok = True
+
+    has_uv = shutil.which("uv") is not None
+    if not has_uv and auto_install:
+        code = _run_command([sys.executable, "-m", "pip", "install", "--upgrade", "uv"], cwd=PROJECT_ROOT)
+        has_uv = code == 0 and shutil.which("uv") is not None
+    rows.append(f"uv: {'OK' if has_uv else 'FAIL'}")
+    ok = ok and has_uv
+
+    has_node = shutil.which("node") is not None
+    rows.append(f"node: {'OK' if has_node else 'FAIL'}")
+    ok = ok and has_node
+
+    has_pnpm = shutil.which("pnpm") is not None
+    if not has_pnpm and auto_install:
+        if shutil.which("corepack") is not None:
+            _run_command(["corepack", "enable"], cwd=PROJECT_ROOT)
+            _run_command(["corepack", "prepare", "pnpm@latest", "--activate"], cwd=PROJECT_ROOT)
+        elif shutil.which("npm") is not None:
+            _run_command(["npm", "install", "-g", "pnpm"], cwd=PROJECT_ROOT)
+        has_pnpm = shutil.which("pnpm") is not None
+    rows.append(f"pnpm: {'OK' if has_pnpm else 'FAIL'}")
+    ok = ok and has_pnpm
+    return ok, rows
+
+
+def _run_aist_download_profile(
+    local_cfg: dict[str, Any],
+    profile_id: str,
+    *,
+    data_config: str | None = None,
+) -> int:
+    profile = AIST_VIDEO_PROFILES[profile_id]
+    data_cfg = data_config or str(local_cfg.get("defaults", {}).get("data_config", "configs/data.yaml"))
+    script_args = [
+        "--config",
+        data_cfg,
+        "--download-videos",
+        "--agree-aist-license",
+        "--skip-preprocess",
+        "--camera-ids",
+        ",".join(profile["camera_ids"]),
+        "--min-cameras-per-group",
+        str(profile["min_cameras_per_group"]),
+    ]
+    if int(profile["group_limit"]) > 0:
+        script_args.extend(["--group-limit", str(profile["group_limit"])])
+    return _run_python_script("download_and_prepare_aist.py", script_args)
+
+
+def _run_config_wizard(local_cfg: dict[str, Any], args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
+    print("=== PoseMentor Config UI ===")
+    tool_ok, tool_rows = _bootstrap_tools(auto_install=False)
+    print("环境检查：")
+    for row in tool_rows:
+        print(f"- {row}")
+    if not tool_ok and _prompt_yes_no("检测到缺失工具，是否尝试自动安装？", default=True):
+        tool_ok, tool_rows = _bootstrap_tools(auto_install=True)
+        print("安装后检查：")
+        for row in tool_rows:
+            print(f"- {row}")
+    if not tool_ok:
+        print("[WARN] 仍有工具缺失，建议先修复后继续。")
+
+    current_profile = str(local_cfg.get("defaults", {}).get("aist_video_profile", "mv3_quick"))
+    if current_profile not in AIST_VIDEO_PROFILES:
+        current_profile = "mv3_quick"
+    aist_video_root = PROJECT_ROOT / "data" / "raw" / "aistpp" / "videos"
+    stats = _inspect_aist_videos(aist_video_root)
+    print(
+        "\n当前 AIST 本地状态:"
+        f" videos={stats['file_count']} groups={stats['group_count']} cameras={','.join(stats['camera_ids']) or '-'}"
+    )
+    _print_profile_table(stats, current_profile)
+
+    profile_options = list(AIST_VIDEO_PROFILES.keys())
+    selected_profile = _prompt_choice(
+        "选择 AIST 多机位下载 Profile",
+        profile_options,
+        default_index=profile_options.index(current_profile),
+    )
+    backend_port = _prompt_int("后端端口", default=int(args.backend_port))
+    frontend_port = _prompt_int("前端端口", default=int(args.frontend_port))
+
+    overrides = {
+        "profile": args.profile,
+        "network.backend_host": args.backend_host,
+        "network.backend_port": backend_port,
+        "network.frontend_host": args.frontend_host,
+        "network.frontend_port": frontend_port,
+        "defaults.dataset_id": args.dataset_id,
+        "defaults.standard_id": args.standard_id,
+        "defaults.aist_video_profile": selected_profile,
+    }
+    download_now = _prompt_yes_no("是否立即按所选 Profile 下载 AIST 多机位素材？", default=False)
+    return overrides, download_now
 
 
 def _platform_group() -> str:
@@ -97,32 +296,6 @@ def _ensure_project_dirs(local_cfg: dict[str, Any]) -> None:
     (PROJECT_ROOT / "artifacts").mkdir(parents=True, exist_ok=True)
     (PROJECT_ROOT / "outputs").mkdir(parents=True, exist_ok=True)
     _runtime_dirs(local_cfg)
-
-
-def _install_local_launchers() -> None:
-    shell_launcher = PROJECT_ROOT / "posementor"
-    shell_launcher.write_text(_launcher_shell_text(), encoding="utf-8")
-    shell_launcher.chmod(shell_launcher.stat().st_mode | 0o111)
-
-    cmd_launcher = PROJECT_ROOT / "posementor.cmd"
-    cmd_launcher.write_text(_launcher_cmd_text(), encoding="utf-8")
-
-    if platform.system() != "Windows":
-        print(f"[OK] 已生成入口: {shell_launcher}")
-        return
-
-    exe_src = PROJECT_ROOT / ".venv" / "Scripts" / "posementor.exe"
-    script_src = PROJECT_ROOT / ".venv" / "Scripts" / "posementor-script.py"
-    exe_dst = PROJECT_ROOT / "posementor.exe"
-    script_dst = PROJECT_ROOT / "posementor-script.py"
-
-    if exe_src.exists():
-        shutil.copy2(exe_src, exe_dst)
-        if script_src.exists():
-            shutil.copy2(script_src, script_dst)
-        print(f"[OK] 已生成入口: {exe_dst}")
-    else:
-        print("[WARN] 未找到 .venv/Scripts/posementor.exe，已生成 posementor.cmd 兼容入口")
 
 
 def _pid_file(pids_dir: Path, service_name: str) -> Path:
@@ -422,7 +595,9 @@ def _doctor(local_cfg: dict[str, Any]) -> int:
         checks.append((f"命令 {cmd}", exists, "已安装" if exists else "缺失"))
 
     checks.append(("本地配置", LOCAL_CONFIG_FILE.exists(), str(LOCAL_CONFIG_FILE)))
-    checks.append(("项目入口", (PROJECT_ROOT / "posementor").exists(), str(PROJECT_ROOT / "posementor")))
+    checks.append(
+        ("统一脚本入口", (PROJECT_ROOT / "scripts" / "posementor.py").exists(), str(PROJECT_ROOT / "scripts" / "posementor.py"))
+    )
 
     network_cfg = local_cfg.get("network", {})
     backend_host = str(network_cfg.get("backend_host", "127.0.0.1"))
@@ -470,8 +645,8 @@ def _doctor(local_cfg: dict[str, Any]) -> int:
         print("- 先安装 Node.js 20+ 和 pnpm，然后重跑 `uv run posementor init`")
     if "本地配置" in failed_items:
         print("- 先执行 `uv run posementor config` 生成本地配置")
-    if "项目入口" in failed_items:
-        print("- 先执行 `uv run posementor install-launchers` 生成 ./posementor 入口")
+    if "统一脚本入口" in failed_items:
+        print("- 检查 `scripts/posementor.py` 是否存在，推荐使用 `python scripts/posementor.py` 执行 CLI")
     if "AIST 注释目录" in failed_items:
         print("- 执行 `uv run posementor quickstart --skip-train` 先准备数据")
     if "YOLO 权重" in failed_items:
@@ -485,12 +660,21 @@ def _run_quickstart(local_cfg: dict[str, Any], args: argparse.Namespace) -> int:
     defaults = local_cfg.get("defaults", {})
     data_cfg = args.data_config or str(defaults.get("data_config", "configs/data.yaml"))
     train_cfg = args.train_config or str(defaults.get("train_config", "configs/train.yaml"))
+    selected_profile = args.video_profile or str(defaults.get("aist_video_profile", "mv3_quick"))
 
     if not args.skip_data:
         code = _run_python_script(
             "download_and_prepare_aist.py",
             ["--config", data_cfg, "--download", "--extract"],
         )
+        if code != 0:
+            return code
+
+    if args.download_videos:
+        if selected_profile not in AIST_VIDEO_PROFILES:
+            print(f"[ERROR] 未知视频 Profile: {selected_profile}")
+            return 2
+        code = _run_aist_download_profile(local_cfg, selected_profile, data_config=data_cfg)
         if code != 0:
             return code
 
@@ -537,23 +721,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_config.add_argument("--frontend-port", type=int, default=7860)
     p_config.add_argument("--dataset-id", default="aistpp")
     p_config.add_argument("--standard-id", default="private_action_core")
+    p_config.add_argument("--aist-video-profile", choices=list(AIST_VIDEO_PROFILES.keys()), default="mv3_quick")
     p_config.add_argument("--config-path", default=str(LOCAL_CONFIG_FILE))
-
-    p_config_init = sub.add_parser("config-init", help="初始化本地配置")
-    p_config_init.add_argument("--force", action="store_true")
-    p_config_init.add_argument("--profile", default="quick")
-    p_config_init.add_argument("--backend-host", default="127.0.0.1")
-    p_config_init.add_argument("--backend-port", type=int, default=8787)
-    p_config_init.add_argument("--frontend-host", default="127.0.0.1")
-    p_config_init.add_argument("--frontend-port", type=int, default=7860)
-    p_config_init.add_argument("--dataset-id", default="aistpp")
-    p_config_init.add_argument("--standard-id", default="private_action_core")
-    p_config_init.add_argument("--config-path", default=str(LOCAL_CONFIG_FILE))
-
-    p_config_show = sub.add_parser("config-show", help="显示当前本地配置")
-    p_config_show.add_argument("--config-path", default=str(LOCAL_CONFIG_FILE))
-
-    sub.add_parser("install-launchers", help="生成 ./posementor 与 Windows 入口")
+    p_config.add_argument("--wizard", action="store_true", help="使用交互式 Config UI")
+    p_config.add_argument("--plain", action="store_true", help="使用非交互模式写入配置")
+    p_config.add_argument("--download-now", action="store_true", help="配置完成后立即执行 AIST 多机位下载")
 
     sub.add_parser("doctor", help="检查运行环境和关键依赖")
 
@@ -578,59 +750,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_quickstart.add_argument("--train-config", default="")
     p_quickstart.add_argument("--epochs", type=int, default=1)
     p_quickstart.add_argument("--skip-data", action="store_true")
+    p_quickstart.add_argument("--download-videos", action="store_true", help="按本地配置下载 AIST 多机位视频")
+    p_quickstart.add_argument("--video-profile", default="", help="覆盖本地配置中的 AIST 视频下载 Profile")
     p_quickstart.add_argument("--skip-extract", action="store_true")
     p_quickstart.add_argument("--skip-train", action="store_true")
     p_quickstart.add_argument("--export-onnx", action="store_true")
     p_quickstart.add_argument("--up", action="store_true", help="训练结束后自动启动前后端")
-
-    p_prepare = sub.add_parser("prepare-aist", help="下载并预处理 AIST++")
-    p_prepare.add_argument("--config", default="configs/data.yaml")
-    p_prepare.add_argument("--download", action="store_true")
-    p_prepare.add_argument("--extract", action="store_true")
-    p_prepare.add_argument("--download-videos", action="store_true")
-    p_prepare.add_argument("--video-limit", type=int, default=0)
-    p_prepare.add_argument("--agree-aist-license", action="store_true")
-    p_prepare.add_argument("--skip-preprocess", action="store_true")
-    p_prepare.add_argument("--limit", type=int, default=0)
-
-    p_yolo = sub.add_parser("extract-yolo2d", help="使用 YOLO11 提取 2D 关键点")
-    p_yolo.add_argument("--config", default="configs/data.yaml")
-    p_yolo.add_argument("--video-root", default="")
-    p_yolo.add_argument("--out-dir", default="")
-    p_yolo.add_argument("--recursive", action="store_true")
-    p_yolo.add_argument("--weights", default="yolo11m-pose.pt")
-    p_yolo.add_argument("--conf", type=float, default=0.35)
-    p_yolo.add_argument("--max-videos", type=int, default=0)
-
-    p_aist2d = sub.add_parser("extract-aist2d", help="从 AIST++ 官方 2D 注释构建训练输入")
-    p_aist2d.add_argument("--config", default="configs/data.yaml")
-    p_aist2d.add_argument("--max-files", type=int, default=0)
-    p_aist2d.add_argument("--overwrite", action="store_true")
-
-    p_train = sub.add_parser("train-lift", help="训练 3D Lift 模型")
-    p_train.add_argument("--config", default="configs/train.yaml")
-    p_train.add_argument("--epochs", type=int, default=0)
-    p_train.add_argument("--max-train-pairs", type=int, default=0)
-    p_train.add_argument("--max-val-pairs", type=int, default=0)
-    p_train.add_argument("--sample-stride", type=int, default=0)
-    p_train.add_argument("--seq-len", type=int, default=0)
-    p_train.add_argument("--num-workers", type=int, default=-1)
-    p_train.add_argument("--export-onnx", action="store_true")
-
-    p_multi = sub.add_parser("prepare-multiview", help="处理四机位数据")
-    p_multi.add_argument("--config", default="configs/multiview.yaml")
-    p_multi.add_argument("--limit-sessions", type=int, default=0)
-
-    p_report = sub.add_parser("report-multiview", help="生成四机位处理报告")
-    p_report.add_argument("--manifest", default="data/processed/multiview/multiview_manifest.csv")
-    p_report.add_argument(
-        "--output",
-        default="outputs/visualization/multiview/multiview_report.html",
-    )
-
-    p_backend = sub.add_parser("serve-backend", help="启动 Backend API")
-    p_backend.add_argument("--host", default="0.0.0.0")
-    p_backend.add_argument("--port", type=int, default=8787)
 
     return parser
 
@@ -641,32 +766,54 @@ def main() -> None:
     cmd = args.command
     local_cfg = load_local_config(Path(getattr(args, "config_path", LOCAL_CONFIG_FILE)))
 
-    if cmd in {"config", "config-init"}:
-        overrides = {
-            "profile": args.profile,
-            "network.backend_host": args.backend_host,
-            "network.backend_port": args.backend_port,
-            "network.frontend_host": args.frontend_host,
-            "network.frontend_port": args.frontend_port,
-            "defaults.dataset_id": args.dataset_id,
-            "defaults.standard_id": args.standard_id,
-        }
-        config_path, created = init_local_config(
-            config_path=Path(args.config_path),
-            force=args.force,
-            overrides=overrides,
-        )
+    if cmd == "config":
+        use_wizard = (args.wizard or not args.plain) and sys.stdin.isatty()
+        download_now = bool(args.download_now)
+        if use_wizard:
+            overrides, wizard_download_now = _run_config_wizard(local_cfg, args)
+            download_now = download_now or wizard_download_now
+        else:
+            profile_id = args.aist_video_profile.strip() or "mv3_quick"
+            if profile_id not in AIST_VIDEO_PROFILES:
+                print(f"[ERROR] 未知 aist_video_profile: {profile_id}")
+                raise SystemExit(2)
+            overrides = {
+                "profile": args.profile,
+                "network.backend_host": args.backend_host,
+                "network.backend_port": args.backend_port,
+                "network.frontend_host": args.frontend_host,
+                "network.frontend_port": args.frontend_port,
+                "defaults.dataset_id": args.dataset_id,
+                "defaults.standard_id": args.standard_id,
+                "defaults.aist_video_profile": profile_id,
+            }
+        if args.force:
+            config_path, created = init_local_config(
+                config_path=Path(args.config_path),
+                force=True,
+                overrides=overrides,
+            )
+        else:
+            config_path, created = upsert_local_config(
+                config_path=Path(args.config_path),
+                overrides=overrides,
+            )
         state = "已创建" if created else "已存在"
         print(f"[DONE] 本地配置{state}: {config_path}")
-        raise SystemExit(0)
-
-    if cmd == "config-show":
-        cfg = load_local_config(Path(args.config_path))
-        print(cfg)
-        raise SystemExit(0)
-
-    if cmd == "install-launchers":
-        _install_local_launchers()
+        local_cfg = load_local_config(Path(args.config_path))
+        selected_profile = str(local_cfg.get("defaults", {}).get("aist_video_profile", "mv3_quick"))
+        if download_now:
+            if selected_profile not in AIST_VIDEO_PROFILES:
+                print(f"[WARN] 未知 Profile: {selected_profile}，跳过下载")
+            else:
+                code = _run_aist_download_profile(local_cfg, selected_profile)
+                if code != 0:
+                    raise SystemExit(code)
+        stats = _inspect_aist_videos(PROJECT_ROOT / "data" / "raw" / "aistpp" / "videos")
+        print(
+            "[INFO] 当前 AIST 本地状态:"
+            f" videos={stats['file_count']} groups={stats['group_count']} cameras={','.join(stats['camera_ids']) or '-'}"
+        )
         raise SystemExit(0)
 
     if cmd == "doctor":
@@ -676,6 +823,13 @@ def main() -> None:
         init_local_config(Path(args.config_path), force=args.force_config)
         local_cfg = load_local_config(Path(args.config_path))
         _ensure_project_dirs(local_cfg)
+        tool_ok, tool_rows = _bootstrap_tools(auto_install=True)
+        print("=== Toolchain 检查 ===")
+        for row in tool_rows:
+            print(f"- {row}")
+        if not tool_ok:
+            print("[ERROR] 关键工具缺失，无法继续 init")
+            raise SystemExit(2)
         env = dict(os.environ)
         env["UV_CACHE_DIR"] = str(PROJECT_ROOT / ".uv_cache")
 
@@ -692,8 +846,6 @@ def main() -> None:
             cwd=PROJECT_ROOT,
             env=env,
         )
-        if code == 0:
-            _install_local_launchers()
         raise SystemExit(code)
 
     if cmd in {"up", "start"}:
@@ -772,93 +924,5 @@ def main() -> None:
 
     if cmd == "quickstart":
         raise SystemExit(_run_quickstart(local_cfg, args))
-
-    if cmd == "prepare-aist":
-        extra = ["--config", args.config]
-        if args.download:
-            extra.append("--download")
-        if args.extract:
-            extra.append("--extract")
-        if args.download_videos:
-            extra.append("--download-videos")
-            if args.video_limit > 0:
-                extra.extend(["--video-limit", str(args.video_limit)])
-            if args.agree_aist_license:
-                extra.append("--agree-aist-license")
-        if args.skip_preprocess:
-            extra.append("--skip-preprocess")
-        if args.limit > 0:
-            extra.extend(["--limit", str(args.limit)])
-        code = _run_python_script("download_and_prepare_aist.py", extra)
-        raise SystemExit(code)
-
-    if cmd == "extract-yolo2d":
-        extra = [
-            "--config",
-            args.config,
-            "--weights",
-            args.weights,
-            "--conf",
-            str(args.conf),
-        ]
-        if args.video_root:
-            extra.extend(["--video-root", args.video_root])
-        if args.out_dir:
-            extra.extend(["--out-dir", args.out_dir])
-        if args.recursive:
-            extra.append("--recursive")
-        if args.max_videos > 0:
-            extra.extend(["--max-videos", str(args.max_videos)])
-        code = _run_python_script("extract_pose_yolo11.py", extra)
-        raise SystemExit(code)
-
-    if cmd == "extract-aist2d":
-        extra = ["--config", args.config]
-        if args.max_files > 0:
-            extra.extend(["--max-files", str(args.max_files)])
-        if args.overwrite:
-            extra.append("--overwrite")
-        code = _run_python_script("extract_pose_aist2d.py", extra)
-        raise SystemExit(code)
-
-    if cmd == "train-lift":
-        extra = ["--config", args.config]
-        if args.epochs > 0:
-            extra.extend(["--epochs", str(args.epochs)])
-        if args.max_train_pairs > 0:
-            extra.extend(["--max-train-pairs", str(args.max_train_pairs)])
-        if args.max_val_pairs > 0:
-            extra.extend(["--max-val-pairs", str(args.max_val_pairs)])
-        if args.sample_stride > 0:
-            extra.extend(["--sample-stride", str(args.sample_stride)])
-        if args.seq_len > 0:
-            extra.extend(["--seq-len", str(args.seq_len)])
-        if args.num_workers >= 0:
-            extra.extend(["--num-workers", str(args.num_workers)])
-        if args.export_onnx:
-            extra.append("--export-onnx")
-        code = _run_python_script("train_3d_lift_demo.py", extra)
-        raise SystemExit(code)
-
-    if cmd == "prepare-multiview":
-        extra = ["--config", args.config]
-        if args.limit_sessions > 0:
-            extra.extend(["--limit-sessions", str(args.limit_sessions)])
-        code = _run_python_script("prepare_multiview_dataset.py", extra)
-        raise SystemExit(code)
-
-    if cmd == "report-multiview":
-        extra = ["--manifest", args.manifest, "--output", args.output]
-        code = _run_python_script("visualize_multiview_report.py", extra)
-        raise SystemExit(code)
-
-    if cmd == "serve-backend":
-        script = Path("backend_api.py")
-        if not script.exists():
-            raise FileNotFoundError(f"找不到脚本: {script}")
-        cmdline = [sys.executable, "backend_api.py", "--host", args.host, "--port", str(args.port)]
-        print(f"[CMD] {' '.join(cmdline)}")
-        code = subprocess.run(cmdline, check=False).returncode  # noqa: S603
-        raise SystemExit(code)
 
     raise SystemExit(2)

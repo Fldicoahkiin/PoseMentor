@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -14,6 +16,7 @@ from pydantic import BaseModel
 
 from posementor.infra.command_runner import JobRunner
 from posementor.infra.job_store import JobRecord, JobStore
+from posementor.pipeline.preview_renderer import find_sequence_id, render_pose_preview_videos
 from posementor.utils.io import ensure_dir, load_yaml, save_yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -22,9 +25,14 @@ DATASET_REGISTRY_FILE = PROJECT_ROOT / "configs" / "datasets.yaml"
 STANDARD_REGISTRY_FILE = PROJECT_ROOT / "configs" / "standards.yaml"
 ARTIFACT_ROOT = ensure_dir(PROJECT_ROOT / "artifacts")
 DATA_ROOT = ensure_dir(PROJECT_ROOT / "data")
+OUTPUT_ROOT = ensure_dir(PROJECT_ROOT / "outputs")
 
 store = JobStore(root=JOB_ROOT)
-runner = JobRunner(store=store, cwd=PROJECT_ROOT)
+runner = JobRunner(
+    store=store,
+    cwd=PROJECT_ROOT,
+    max_workers=int(os.environ.get("POSEMENTOR_JOB_WORKERS", "1")),
+)
 
 app = FastAPI(title="PoseMentor Backend", version="0.1.0")
 app.add_middleware(
@@ -36,6 +44,7 @@ app.add_middleware(
 )
 app.mount("/artifacts-files", StaticFiles(directory=ARTIFACT_ROOT), name="artifacts-files")
 app.mount("/data-files", StaticFiles(directory=DATA_ROOT), name="data-files")
+app.mount("/outputs-files", StaticFiles(directory=OUTPUT_ROOT), name="outputs-files")
 
 
 class DataPrepareRequest(BaseModel):
@@ -307,6 +316,39 @@ def _resolve_video_root_from_data_config(config_file: Path) -> Path | None:
     return None
 
 
+def _resolve_pose_dirs_from_dataset(dataset: dict[str, str]) -> tuple[Path, Path]:
+    yolo_dir: Path | None = None
+    gt_dir: Path | None = None
+
+    data_config = dataset.get("data_config", "").strip()
+    if data_config:
+        cfg_path = PROJECT_ROOT / data_config
+        if cfg_path.exists():
+            data_cfg = load_yaml(cfg_path)
+            if isinstance(data_cfg, dict) and isinstance(data_cfg.get("processed_root"), str):
+                processed_root = PROJECT_ROOT / str(data_cfg["processed_root"])
+                yolo_dir = processed_root / "yolo2d"
+                gt_dir = processed_root / "gt3d"
+
+    train_config = dataset.get("train_config", "").strip()
+    if train_config:
+        train_cfg_path = PROJECT_ROOT / train_config
+        if train_cfg_path.exists():
+            train_cfg = load_yaml(train_cfg_path)
+            if isinstance(train_cfg, dict) and isinstance(train_cfg.get("data"), dict):
+                data_section = train_cfg["data"]
+                if yolo_dir is None and isinstance(data_section.get("yolo2d_dir"), str):
+                    yolo_dir = PROJECT_ROOT / str(data_section["yolo2d_dir"])
+                if gt_dir is None and isinstance(data_section.get("gt3d_dir"), str):
+                    gt_dir = PROJECT_ROOT / str(data_section["gt3d_dir"])
+
+    if yolo_dir is None or gt_dir is None:
+        default_root = PROJECT_ROOT / "data" / "processed" / dataset["id"]
+        yolo_dir = yolo_dir or (default_root / "yolo2d")
+        gt_dir = gt_dir or (default_root / "gt3d")
+    return yolo_dir, gt_dir
+
+
 def _artifact_kind(path: Path) -> str:
     suffix = path.suffix.lower()
     if suffix in {".ckpt", ".pth", ".pt", ".onnx", ".npz"}:
@@ -407,6 +449,89 @@ def source_preview(dataset_id: str = "aistpp", limit: int = 3) -> dict[str, obje
         "dataset_id": dataset_id,
         "video_root": _to_project_relative(video_root),
         "samples": samples,
+    }
+
+
+@app.get("/workspace/pose-preview")
+@app.get("/api/workspace/pose-preview")
+def workspace_pose_preview(dataset_id: str, video_path: str) -> dict[str, object]:
+    _assert_dataset_exists(dataset_id)
+    dataset = _find_dataset(dataset_id)
+    if not isinstance(dataset, dict):
+        raise HTTPException(status_code=404, detail=f"dataset_id={dataset_id} 未注册")
+
+    source_video = (PROJECT_ROOT / video_path).resolve()
+    if not source_video.exists() or not source_video.is_file():
+        raise HTTPException(status_code=404, detail=f"视频不存在: {video_path}")
+    try:
+        source_video.relative_to(PROJECT_ROOT)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="video_path 必须位于项目目录内") from exc
+    try:
+        rel_data_video = source_video.relative_to(DATA_ROOT)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="video_path 必须位于 data 目录内") from exc
+
+    yolo_dir, gt_dir = _resolve_pose_dirs_from_dataset(_normalize_dataset_item(dataset))
+    if not yolo_dir.exists() or not gt_dir.exists():
+        detail = (
+            "2D/3D 数据目录不存在: "
+            f"yolo2d={_to_project_relative(yolo_dir)} "
+            f"gt3d={_to_project_relative(gt_dir)}"
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=detail,
+        )
+
+    source_name = source_video.name
+    source_stem = source_video.stem
+    seq_id = find_sequence_id(
+        yolo2d_dir=yolo_dir,
+        video_stem=source_stem,
+        source_video_name=source_name,
+    )
+    if not seq_id:
+        raise HTTPException(status_code=404, detail=f"未找到视频对应关键点: {source_name}")
+
+    yolo_file = yolo_dir / f"{seq_id}.npz"
+    gt_file = gt_dir / f"{seq_id}.npz"
+    if not yolo_file.exists() or not gt_file.exists():
+        raise HTTPException(status_code=404, detail=f"未找到序列配套文件: seq_id={seq_id}")
+
+    with np.load(yolo_file) as yolo_data:
+        keypoints2d = yolo_data["keypoints2d"].astype(np.float32)
+    with np.load(gt_file) as gt_data:
+        joints3d = gt_data["joints3d"].astype(np.float32)
+
+    cache_dir = ensure_dir(OUTPUT_ROOT / "preview_cache" / dataset_id)
+    output_2d = cache_dir / f"{source_stem}_pose2d.mp4"
+    output_3d = cache_dir / f"{source_stem}_pose3d.mp4"
+    source_mtime = source_video.stat().st_mtime
+    dep_mtime = max(yolo_file.stat().st_mtime, gt_file.stat().st_mtime, source_mtime)
+    need_render = True
+    if output_2d.exists() and output_3d.exists():
+        output_mtime = min(output_2d.stat().st_mtime, output_3d.stat().st_mtime)
+        need_render = output_mtime < dep_mtime
+
+    stats: dict[str, float] = {"fps": 0.0, "frames": 0.0}
+    if need_render:
+        stats = render_pose_preview_videos(
+            source_video=source_video,
+            keypoints2d=keypoints2d,
+            joints3d=joints3d,
+            output_2d=output_2d,
+            output_3d=output_3d,
+        )
+
+    return {
+        "dataset_id": dataset_id,
+        "seq_id": seq_id,
+        "source_video_url": f"/data-files/{rel_data_video.as_posix()}",
+        "pose2d_video_url": f"/outputs-files/preview_cache/{dataset_id}/{output_2d.name}",
+        "pose3d_video_url": f"/outputs-files/preview_cache/{dataset_id}/{output_3d.name}",
+        "fps": stats["fps"],
+        "frames": stats["frames"],
     }
 
 

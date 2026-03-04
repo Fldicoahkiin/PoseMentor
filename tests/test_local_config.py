@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from posementor.local_config import init_local_config, load_local_config
+from posementor.local_config import init_local_config, load_local_config, upsert_local_config
 
 
 def test_init_local_config_creates_file(tmp_path: Path) -> None:
@@ -43,3 +43,21 @@ def test_init_local_config_without_force_keeps_existing(tmp_path: Path) -> None:
 
     cfg = load_local_config(config_path)
     assert cfg["network"]["backend_port"] == 9001
+
+
+def test_upsert_local_config_updates_existing_values(tmp_path: Path) -> None:
+    config_path = tmp_path / "configs" / "local.yaml"
+    init_local_config(config_path=config_path, force=False, overrides={"network.backend_port": 9001})
+    path, created = upsert_local_config(
+        config_path=config_path,
+        overrides={
+            "network.backend_port": 9003,
+            "defaults.aist_video_profile": "mv5_standard",
+        },
+    )
+    assert created is False
+    assert path.exists()
+
+    cfg = load_local_config(config_path)
+    assert cfg["network"]["backend_port"] == 9003
+    assert cfg["defaults"]["aist_video_profile"] == "mv5_standard"

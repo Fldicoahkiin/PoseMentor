@@ -19,6 +19,7 @@ DEFAULT_LOCAL_CONFIG: dict[str, Any] = {
         "standard_id": "private_action_core",
         "train_config": "configs/train.yaml",
         "data_config": "configs/data.yaml",
+        "aist_video_profile": "mv3_quick",
     },
     "runtime": {
         "logs_dir": "outputs/runtime/logs",
@@ -74,3 +75,17 @@ def init_local_config(
     ensure_dir(config_path.parent)
     save_yaml(config_path, payload)
     return config_path, True
+
+
+def upsert_local_config(
+    config_path: Path,
+    overrides: dict[str, Any] | None = None,
+) -> tuple[Path, bool]:
+    created = not config_path.exists()
+    payload = load_local_config(config_path)
+    if overrides:
+        for key, value in overrides.items():
+            _set_by_dotted_key(payload, key, value)
+    ensure_dir(config_path.parent)
+    save_yaml(config_path, payload)
+    return config_path, created

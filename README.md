@@ -65,30 +65,19 @@ posementor/
 快速路径（推荐）：
 
 ```bash
-uv run python scripts/config_setup.py
-uv run posementor init
-uv run posementor quickstart --epochs 1 --export-onnx --up
-```
-
-也支持项目内可执行入口（完成 `init` 后）：
-
-```bash
-./posementor config
-./posementor doctor
-./posementor quickstart --epochs 1 --up
-```
-
-Windows 会在 `init` 后生成 `posementor.exe`，可直接：
-
-```powershell
-posementor.exe config
-posementor.exe doctor
-posementor.exe quickstart --epochs 1 --up
+./pm config
+./pm init
+./pm quickstart --epochs 1 --export-onnx --up
 ```
 
 查看状态与日志：
-- `uv run posementor status`
-- `uv run posementor logs --service all --lines 120`
+- `./pm status`
+- `./pm logs --service all --lines 120`
+
+Windows PowerShell：
+- `.\pm.ps1 config`
+- `.\pm.ps1 init`
+- `.\pm.ps1 quickstart --epochs 1 --export-onnx --up`
 
 ## AIST++ 下载链接
 
@@ -101,6 +90,14 @@ posementor.exe quickstart --epochs 1 --up
 ```bash
 uv run python download_and_prepare_aist.py --config configs/data.yaml --download --extract
 ```
+
+多机位下载建议通过 Config UI 选择 Profile（`mv3_quick` / `mv5_standard` / `mv9_core` / `mv9_full`）：
+
+```bash
+./pm config
+```
+
+Profile 都是多机位配置，不提供单机位模板。
 
 快速构建训练用 2D（无需先跑 YOLO）：
 
@@ -117,9 +114,10 @@ curl http://127.0.0.1:8787/datasets
 ```
 
 本地数据集管理：
-- 前端：`http://127.0.0.1:7860/admin` → `数据集管理`
+- 前端：`http://127.0.0.1:7860/` → `训练数据集` 下拉
 - 后端接口：`POST /datasets/upsert`
 - 注册表文件：`configs/datasets.yaml`
+- 当前仅保留两类数据源：`aistpp`、`custom_multiview`
 - 四机位接入时，只需配置 `video_root` 到本地目录（例如 `data/raw/multiview`）
 - 任务过程进度：`GET /jobs/{job_id}/progress`
 
@@ -197,33 +195,26 @@ uv run python visualize_multiview_report.py --manifest data/processed/multiview/
 
 ## CLI 集成
 
-统一入口命令：`posementor`（兼容入口脚本：`posementor_cli.py`）
+统一入口脚本（项目内零 PATH）：`./pm`（Windows 使用 `.\pm.ps1` 或 `.\pm.cmd`）
 
 示例：
 
 ```bash
-uv run posementor config --force
-uv run posementor doctor
-uv run posementor install-launchers
-uv run posementor up
-uv run posementor status
-uv run posementor cleanup
-uv run posementor logs --service backend_api --lines 80
-uv run posementor down
-uv run posementor start
-uv run posementor stop
-uv run posementor restart
+./pm config
+./pm config --plain --force --download-now
+./pm doctor
+./pm init
+./pm quickstart --download-videos --video-profile mv5_standard --epochs 1 --export-onnx --up
+./pm status
+./pm cleanup
+./pm logs --service backend_api --lines 80
+./pm down
+./pm start
+./pm stop
+./pm restart
 
-./posementor status
-./posementor cleanup
-./posementor logs --service all --lines 120
-./posementor start
-./posementor stop
-./posementor restart
-
-uv run python posementor_cli.py extract-aist2d --config configs/data.yaml
-uv run python posementor_cli.py train-lift --config configs/train.yaml --epochs 2
-uv run python posementor_cli.py prepare-multiview --config configs/multiview.yaml --limit-sessions 10
+uv run posementor config
+uv run posementor quickstart --download-videos --video-profile mv9_core --epochs 1
 ```
 
 ## Backend API
