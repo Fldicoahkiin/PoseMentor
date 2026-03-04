@@ -1,9 +1,8 @@
 import { Suspense, useState } from 'react';
 import { BrowserRouter, Routes, Route, Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, PanelLeftClose, PanelLeftOpen, UserRoundCog } from 'lucide-react';
+import { PanelLeftClose, PanelLeftOpen, UserRoundCog } from 'lucide-react';
 import { cn } from './lib/utils';
 import DemoPage from './pages/DemoPage';
-import AdminPage from './pages/AdminPage';
 
 type SidebarProps = {
   collapsed: boolean;
@@ -15,7 +14,6 @@ function Sidebar({ collapsed, onToggle }: SidebarProps) {
 
   const links = [
     { name: '训练工作台', href: '/', icon: UserRoundCog },
-    { name: '任务控制台', href: '/admin', icon: LayoutDashboard },
   ];
 
   return (
@@ -98,7 +96,6 @@ function Shell() {
           <div className={cn("mx-auto py-10", isDemoPage ? "max-w-none px-6" : "max-w-6xl px-8")}>
             <Routes>
               <Route path="/" element={<DemoPage />} />
-              <Route path="/admin" element={<AdminPage />} />
             </Routes>
           </div>
         </Suspense>

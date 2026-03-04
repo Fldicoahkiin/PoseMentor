@@ -68,6 +68,8 @@ export type SourcePreviewItem = {
   path: string;
   url: string;
   size_bytes: number;
+  group_key?: string;
+  camera_id?: string;
 };
 
 export type SourcePreviewPayload = {
