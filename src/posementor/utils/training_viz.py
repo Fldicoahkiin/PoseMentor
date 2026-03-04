@@ -2,16 +2,19 @@ from __future__ import annotations
 
 import csv
 import json
+import shutil
+import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import cv2
+import numpy as np
+import plotly.graph_objects as go
+import torch
 from lightning.pytorch.callbacks import Callback
 from plotly.subplots import make_subplots
-import plotly.graph_objects as go
-import numpy as np
-import torch
 
 from posementor.utils.io import ensure_dir
 from posementor.utils.joints import JOINT_NAMES, SKELETON_EDGES
@@ -318,15 +321,51 @@ class TrainingVisualizationCallback(Callback):
         if not frames:
             return
         height, width = frames[0].shape[:2]
-        writer = cv2.VideoWriter(
-            str(path),
-            cv2.VideoWriter_fourcc(*"mp4v"),
-            max(1.0, fps),
-            (width, height),
-        )
-        for frame in frames:
-            writer.write(frame)
-        writer.release()
+        frame_fps = max(1.0, fps)
+
+        with tempfile.TemporaryDirectory(prefix="posementor_viz_", dir=str(path.parent)) as tmp_dir:
+            raw_path = Path(tmp_dir) / "raw.mp4"
+            writer = cv2.VideoWriter(
+                str(raw_path),
+                cv2.VideoWriter_fourcc(*"mp4v"),
+                frame_fps,
+                (width, height),
+            )
+            for frame in frames:
+                writer.write(frame)
+            writer.release()
+
+            ffmpeg_bin = shutil.which("ffmpeg")
+            if ffmpeg_bin:
+                command = [
+                    ffmpeg_bin,
+                    "-y",
+                    "-loglevel",
+                    "error",
+                    "-i",
+                    str(raw_path),
+                    "-an",
+                    "-c:v",
+                    "libx264",
+                    "-preset",
+                    "veryfast",
+                    "-profile:v",
+                    "baseline",
+                    "-level",
+                    "3.1",
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-movflags",
+                    "+faststart",
+                    str(path),
+                ]
+                try:
+                    subprocess.run(command, check=True)
+                    return
+                except Exception:  # noqa: BLE001
+                    pass
+
+            shutil.copy2(raw_path, path)
 
     def _write_sync_videos(
         self,

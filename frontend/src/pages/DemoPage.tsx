@@ -96,6 +96,11 @@ export default function DemoPage() {
   const [syncDuration, setSyncDuration] = useState(0);
   const [syncPlaying, setSyncPlaying] = useState(false);
   const [syncPlaybackRate, setSyncPlaybackRate] = useState(1);
+  const syncDurationsRef = useRef<{ source: number; pose2d: number; pose3d: number }>({
+    source: 0,
+    pose2d: 0,
+    pose3d: 0,
+  });
   const sourceVideoRef = useRef<HTMLVideoElement | null>(null);
   const pose2dVideoRef = useRef<HTMLVideoElement | null>(null);
   const pose3dVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -295,19 +300,41 @@ export default function DemoPage() {
     [],
   );
 
-  const syncSeekAll = useCallback(
-    (timeSeconds: number, skip?: HTMLVideoElement | null) => {
-      getSyncVideos().forEach((element) => {
-        if (element === skip) {
+  const syncFromSource = useCallback(
+    (force: boolean) => {
+      const source = sourceVideoRef.current;
+      if (!source) {
+        return;
+      }
+      const sourceTime = source.currentTime;
+      const tolerance = force ? 0.01 : 0.08;
+      [pose2dVideoRef.current, pose3dVideoRef.current].forEach((element) => {
+        if (!element) {
           return;
         }
-        if (Math.abs(element.currentTime - timeSeconds) > 0.08) {
-          element.currentTime = timeSeconds;
+        if (Math.abs(element.currentTime - sourceTime) > tolerance) {
+          element.currentTime = sourceTime;
+        }
+        if (!source.paused && element.paused) {
+          void element.play().catch(() => undefined);
+        }
+        if (source.paused && !element.paused) {
+          element.pause();
         }
       });
+      setSyncCurrentTime(sourceTime);
     },
-    [getSyncVideos],
+    [],
   );
+
+  const syncSeekAll = useCallback((timeSeconds: number) => {
+    getSyncVideos().forEach((element) => {
+      if (Math.abs(element.currentTime - timeSeconds) > 0.01) {
+        element.currentTime = timeSeconds;
+      }
+    });
+    setSyncCurrentTime(timeSeconds);
+  }, [getSyncVideos]);
 
   const syncSetRateAll = useCallback(
     (rate: number) => {
@@ -318,24 +345,42 @@ export default function DemoPage() {
     [getSyncVideos],
   );
 
-  const handleSyncLoadedMetadata = useCallback((video: HTMLVideoElement) => {
+  const handleSyncLoadedMetadata = useCallback((role: 'source' | 'pose2d' | 'pose3d', video: HTMLVideoElement) => {
     if (Number.isFinite(video.duration) && video.duration > 0) {
-      setSyncDuration(video.duration);
-    }
-  }, []);
-
-  const handleSyncTimeUpdate = useCallback(
-    (video: HTMLVideoElement) => {
-      setSyncCurrentTime(video.currentTime);
-      if (syncDuration <= 0 && Number.isFinite(video.duration) && video.duration > 0) {
-        setSyncDuration(video.duration);
+      syncDurationsRef.current[role] = video.duration;
+      const validDurations = Object.values(syncDurationsRef.current).filter((value) => Number.isFinite(value) && value > 0);
+      if (validDurations.length > 0) {
+        setSyncDuration(Math.min(...validDurations));
       }
-      syncSeekAll(video.currentTime, video);
-    },
-    [syncDuration, syncSeekAll],
-  );
+    }
+    video.playbackRate = syncPlaybackRate;
+  }, [syncPlaybackRate]);
+
+  const handleSourceTimeUpdate = useCallback(() => {
+    const source = sourceVideoRef.current;
+    if (!source) {
+      return;
+    }
+    if (syncDuration <= 0 && Number.isFinite(source.duration) && source.duration > 0) {
+      setSyncDuration(source.duration);
+    }
+    syncFromSource(false);
+  }, [syncDuration, syncFromSource]);
 
   const handleSyncPlay = useCallback(async () => {
+    const source = sourceVideoRef.current;
+    if (source) {
+      source.playbackRate = syncPlaybackRate;
+      try {
+        await source.play();
+      } catch (err) {
+        console.warn(err);
+      }
+      syncFromSource(true);
+      setSyncPlaying(!source.paused);
+      return;
+    }
+
     for (const element of getSyncVideos()) {
       element.playbackRate = syncPlaybackRate;
       try {
@@ -345,7 +390,7 @@ export default function DemoPage() {
       }
     }
     setSyncPlaying(true);
-  }, [getSyncVideos, syncPlaybackRate]);
+  }, [getSyncVideos, syncFromSource, syncPlaybackRate]);
 
   const handleSyncPause = useCallback(() => {
     getSyncVideos().forEach((element) => {
@@ -357,11 +402,7 @@ export default function DemoPage() {
   const handleSyncSeekInput = useCallback(
     (event: ChangeEvent<HTMLInputElement>) => {
       const nextTime = Number(event.target.value);
-      setSyncCurrentTime(nextTime);
-      syncSeekAll(nextTime, null);
-      if (sourceVideoRef.current) {
-        sourceVideoRef.current.currentTime = nextTime;
-      }
+      syncSeekAll(nextTime);
     },
     [syncSeekAll],
   );
@@ -376,9 +417,20 @@ export default function DemoPage() {
   );
 
   useEffect(() => {
+    if (!syncPlaying) {
+      return undefined;
+    }
+    const timer = window.setInterval(() => {
+      syncFromSource(false);
+    }, 120);
+    return () => window.clearInterval(timer);
+  }, [syncFromSource, syncPlaying]);
+
+  useEffect(() => {
     setSyncCurrentTime(0);
     setSyncDuration(0);
     setSyncPlaying(false);
+    syncDurationsRef.current = { source: 0, pose2d: 0, pose3d: 0 };
   }, [syncSourceVideoUrl, sample2dVideoUrl, sample3dVideoUrl]);
 
   return (
@@ -600,13 +652,24 @@ export default function DemoPage() {
                     ref={sourceVideoRef}
                     controls
                     preload="metadata"
-                    src={syncSourceVideoUrl}
-                    onLoadedMetadata={(event) => handleSyncLoadedMetadata(event.currentTarget)}
-                    onTimeUpdate={(event) => handleSyncTimeUpdate(event.currentTarget)}
-                    onPlay={() => setSyncPlaying(true)}
-                    onPause={() => setSyncPlaying(false)}
+                    playsInline
+                    onLoadedMetadata={(event) => handleSyncLoadedMetadata('source', event.currentTarget)}
+                    onTimeUpdate={handleSourceTimeUpdate}
+                    onPlay={() => {
+                      setSyncPlaying(true);
+                      syncFromSource(true);
+                    }}
+                    onPause={() => {
+                      handleSyncPause();
+                    }}
+                    onEnded={() => {
+                      handleSyncPause();
+                    }}
                     className="h-[260px] w-full rounded-lg border border-zinc-200 bg-black object-contain lg:h-[34vh]"
-                  />
+                  >
+                    <source src={syncSourceVideoUrl} type="video/mp4" />
+                    当前浏览器无法播放视频，请检查编解码格式。
+                  </video>
                 ) : (
                   <div className="flex h-[260px] items-center justify-center rounded-lg border border-dashed border-zinc-300 bg-white text-sm text-zinc-500 lg:h-[34vh]">
                     {previewLoading ? '正在加载素材预览...' : '当前数据集暂无可预览视频'}
@@ -637,15 +700,15 @@ export default function DemoPage() {
                 {sample2dVideoUrl ? (
                   <video
                     ref={pose2dVideoRef}
-                    controls
+                    controls={false}
                     preload="metadata"
-                    src={sample2dVideoUrl}
-                    onLoadedMetadata={(event) => handleSyncLoadedMetadata(event.currentTarget)}
-                    onTimeUpdate={(event) => handleSyncTimeUpdate(event.currentTarget)}
-                    onPlay={() => setSyncPlaying(true)}
-                    onPause={() => setSyncPlaying(false)}
+                    playsInline
+                    onLoadedMetadata={(event) => handleSyncLoadedMetadata('pose2d', event.currentTarget)}
                     className="h-[260px] w-full rounded-lg border border-zinc-200 bg-black object-contain lg:h-[34vh]"
-                  />
+                  >
+                    <source src={sample2dVideoUrl} type="video/mp4" />
+                    当前浏览器无法播放视频，请检查编解码格式。
+                  </video>
                 ) : artifactStatus?.sample_2d_exists ? (
                   <img src={sample2dUrl} alt="训练2D样例" className="h-[260px] w-full rounded-lg border border-zinc-200 bg-white object-contain lg:h-[34vh]" />
                 ) : (
@@ -660,15 +723,15 @@ export default function DemoPage() {
                 {sample3dVideoUrl ? (
                   <video
                     ref={pose3dVideoRef}
-                    controls
+                    controls={false}
                     preload="metadata"
-                    src={sample3dVideoUrl}
-                    onLoadedMetadata={(event) => handleSyncLoadedMetadata(event.currentTarget)}
-                    onTimeUpdate={(event) => handleSyncTimeUpdate(event.currentTarget)}
-                    onPlay={() => setSyncPlaying(true)}
-                    onPause={() => setSyncPlaying(false)}
+                    playsInline
+                    onLoadedMetadata={(event) => handleSyncLoadedMetadata('pose3d', event.currentTarget)}
                     className="h-[260px] w-full rounded-lg border border-zinc-200 bg-black object-contain lg:h-[34vh]"
-                  />
+                  >
+                    <source src={sample3dVideoUrl} type="video/mp4" />
+                    当前浏览器无法播放视频，请检查编解码格式。
+                  </video>
                 ) : artifactStatus?.sample_3d_exists ? (
                   <iframe title="训练3D样例" src={sample3dUrl} className="h-[260px] w-full rounded-lg border border-zinc-200 bg-white lg:h-[34vh]" />
                 ) : (
