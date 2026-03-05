@@ -8,7 +8,6 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 
-from posementor.settings import get_paths
 from posementor.utils.io import ensure_dir, load_yaml
 
 

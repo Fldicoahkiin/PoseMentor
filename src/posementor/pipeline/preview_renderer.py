@@ -15,7 +15,7 @@ from posementor.utils.visualize import draw_pose_2d
 YAW_DEG = 35.0
 PITCH_DEG = 18.0
 CANVAS_BG = 242
-MARGIN = 44.0
+MARGIN = 24.0
 ROOT_LEFT_HIP = 11
 ROOT_RIGHT_HIP = 12
 CAMERA_TOKEN_PATTERN = re.compile(r"_c\d+_")
@@ -85,7 +85,14 @@ def _normalize_xy(
     scale_x = (width - MARGIN * 2.0) / span[0]
     scale_y = (height - MARGIN * 2.0) / span[1]
     scale = float(min(scale_x, scale_y))
-    mapped = (points - min_xy[None, :]) * scale + MARGIN
+    fitted_width = float(span[0]) * scale
+    fitted_height = float(span[1]) * scale
+    offset_x = (float(width) - fitted_width) * 0.5
+    offset_y = (float(height) - fitted_height) * 0.5
+
+    mapped = np.empty((points.shape[0], 2), dtype=np.float32)
+    mapped[:, 0] = (points[:, 0] - float(min_xy[0])) * scale + offset_x
+    mapped[:, 1] = (points[:, 1] - float(min_xy[1])) * scale + offset_y
     mapped[:, 1] = float(height) - mapped[:, 1]
     return mapped
 
@@ -101,10 +108,10 @@ def _smooth_sequence(points: np.ndarray, alpha: float = TEMPORAL_SMOOTH_ALPHA) -
 
 def _draw_scene_grid(canvas: np.ndarray) -> None:
     height, width = canvas.shape[:2]
-    top = int(height * 0.62)
+    top = int(height * 0.68)
     bottom = int(height * 0.94)
-    left = int(width * 0.14)
-    right = int(width * 0.86)
+    left = int(width * 0.08)
+    right = int(width * 0.92)
 
     cv2.rectangle(
         canvas,
@@ -255,10 +262,16 @@ def render_pose_preview_videos(
         [_project_frame(joints3d_use[idx]) for idx in range(frame_total)],
         axis=0,
     )
-    flat_xy = projected_all[:, :, :2].reshape(-1, 2)
-    min_xy = np.percentile(flat_xy, 2, axis=0).astype(np.float32)
-    max_xy = np.percentile(flat_xy, 98, axis=0).astype(np.float32)
-    max_xy = np.maximum(max_xy, min_xy + 1e-3)
+    xy_all = projected_all[:, :, :2]
+    frame_min = np.min(xy_all, axis=1)
+    frame_max = np.max(xy_all, axis=1)
+    frame_center = (frame_min + frame_max) * 0.5
+    frame_span = np.maximum(frame_max - frame_min, 1e-4)
+    center_xy = np.median(frame_center, axis=0).astype(np.float32)
+    span_xy = np.percentile(frame_span, 75, axis=0).astype(np.float32)
+    span_xy = np.maximum(span_xy * 1.35, np.array([0.45, 0.72], dtype=np.float32))
+    min_xy = center_xy - span_xy * 0.5
+    max_xy = center_xy + span_xy * 0.5
 
     frames_2d: list[np.ndarray] = []
     frames_3d: list[np.ndarray] = []

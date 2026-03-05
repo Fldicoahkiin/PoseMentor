@@ -171,8 +171,19 @@ class RealtimeDanceCoach:
         if result.keypoints is None or len(result.keypoints) == 0:
             return None
 
-        keypoints_xy = result.keypoints.xy.cpu().numpy()  # [P,17,2]
-        conf = result.keypoints.conf.cpu().numpy()  # [P,17]
+        xy_data = result.keypoints.xy
+        conf_data = result.keypoints.conf
+        if conf_data is None:
+            return None
+
+        if hasattr(xy_data, "cpu"):
+            keypoints_xy = xy_data.cpu().numpy()  # [P,17,2]
+        else:
+            keypoints_xy = np.asarray(xy_data)
+        if hasattr(conf_data, "cpu"):
+            conf = conf_data.cpu().numpy()  # [P,17]
+        else:
+            conf = np.asarray(conf_data)
 
         # 选择平均置信度最高的人，满足单人教学场景。
         person_idx = int(np.argmax(conf.mean(axis=1)))

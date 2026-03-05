@@ -70,6 +70,8 @@ export type SourcePreviewItem = {
   size_bytes: number;
   group_key?: string;
   camera_id?: string;
+  pose2d_exists?: boolean;
+  pose3d_exists?: boolean;
 };
 
 export type SourcePreviewPayload = {
@@ -174,9 +176,9 @@ export async function fetchSourcePreview(datasetId: string, limit = 4) {
   return data;
 }
 
-export async function fetchPosePreview(datasetId: string, videoPath: string) {
+export async function fetchPosePreview(datasetId: string, videoPath: string, force = false) {
   const { data } = await client.get<PosePreviewPayload>("/workspace/pose-preview", {
-    params: { dataset_id: datasetId, video_path: videoPath },
+    params: { dataset_id: datasetId, video_path: videoPath, refresh: force ? "1" : "0" },
     timeout: 60000,
   });
   return data;

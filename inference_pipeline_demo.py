@@ -6,7 +6,6 @@ import time
 from pathlib import Path
 
 import cv2
-import numpy as np
 
 from posementor.pipeline.realtime_coach import CoachConfig, RealtimeDanceCoach
 from posementor.utils.io import ensure_dir
