@@ -38,16 +38,42 @@ type SourceGroup = {
   samples: SourcePreviewItem[];
   label: string;
   totalSizeBytes: number;
+  generatedViews: number;
   completedViews: number;
   totalViews: number;
 };
 
 const CAMERA_TOKEN_PATTERN = /_c(\d+)_/i;
-const SOURCE_COLUMN_CLASSES = ['xl:col-start-1 xl:row-start-1', 'xl:col-start-2 xl:row-start-1', 'xl:col-start-3 xl:row-start-1'];
-const POSE2D_COLUMN_CLASSES = ['xl:col-start-1 xl:row-start-2', 'xl:col-start-2 xl:row-start-2', 'xl:col-start-3 xl:row-start-2'];
+const SOURCE_COLUMN_CLASSES_BY_LIMIT: Record<number, string[]> = {
+  3: ['xl:col-start-1 xl:row-start-1', 'xl:col-start-2 xl:row-start-1', 'xl:col-start-3 xl:row-start-1'],
+  4: [
+    'xl:col-start-1 xl:row-start-1',
+    'xl:col-start-2 xl:row-start-1',
+    'xl:col-start-3 xl:row-start-1',
+    'xl:col-start-4 xl:row-start-1',
+  ],
+};
+const POSE2D_COLUMN_CLASSES_BY_LIMIT: Record<number, string[]> = {
+  3: ['xl:col-start-1 xl:row-start-2', 'xl:col-start-2 xl:row-start-2', 'xl:col-start-3 xl:row-start-2'],
+  4: [
+    'xl:col-start-1 xl:row-start-2',
+    'xl:col-start-2 xl:row-start-2',
+    'xl:col-start-3 xl:row-start-2',
+    'xl:col-start-4 xl:row-start-2',
+  ],
+};
+const GRID_CLASSES_BY_LIMIT: Record<number, string> = {
+  3: 'grid grid-cols-1 items-start gap-4 xl:grid-cols-4 xl:auto-rows-[minmax(236px,auto)]',
+  4: 'grid grid-cols-1 items-start gap-4 xl:grid-cols-5 xl:auto-rows-[minmax(236px,auto)]',
+};
+const POSE3D_CARD_CLASSES_BY_LIMIT: Record<number, string> = {
+  3: 'self-stretch rounded-xl border border-zinc-200 bg-stone-50 p-3 xl:col-start-4 xl:row-start-1 xl:row-span-2',
+  4: 'self-stretch rounded-xl border border-zinc-200 bg-stone-50 p-3 xl:col-start-5 xl:row-start-1 xl:row-span-2',
+};
 const TRAIN_PROGRESS_STALL_MS = 20_000;
 const SYNC_DRIFT_TOLERANCE = 0.12;
 const SYNC_TICK_MS = 140;
+const DEFAULT_DISPLAY_VIEW_LIMIT = 3;
 
 function formatBytes(sizeBytes: number): string {
   if (sizeBytes < 1024) {
@@ -126,6 +152,9 @@ export default function DemoPage() {
   const [posePreviewMap, setPosePreviewMap] = useState<Record<string, PosePreviewPayload>>({});
   const [posePreviewLoading, setPosePreviewLoading] = useState(false);
   const [posePreviewError, setPosePreviewError] = useState('');
+  const [groupPrepareDone, setGroupPrepareDone] = useState(0);
+  const [groupPrepareTotal, setGroupPrepareTotal] = useState(0);
+  const [displayViewLimit, setDisplayViewLimit] = useState(DEFAULT_DISPLAY_VIEW_LIMIT);
   const [selectedDatasetId, setSelectedDatasetId] = useState('');
   const [selectedStandardId, setSelectedStandardId] = useState('');
   const [selectedGroupKey, setSelectedGroupKey] = useState('');
@@ -147,7 +176,6 @@ export default function DemoPage() {
   const [prefetchHint, setPrefetchHint] = useState('');
   const [autoAdvancePending, setAutoAdvancePending] = useState(false);
   const autoPlayedJobRef = useRef('');
-  const autoPlayStartedRef = useRef('');
   const posePreviewCacheRef = useRef<Record<string, PosePreviewPayload>>({});
   const posePreviewPendingRef = useRef<Record<string, Promise<PosePreviewPayload | null>>>({});
   const previewDatasetRef = useRef('');
@@ -347,20 +375,22 @@ export default function DemoPage() {
     return [...groups.entries()]
       .map(([key, samples]) => {
         const ordered = [...samples].sort((left, right) => left.name.localeCompare(right.name));
+        const visible = ordered.slice(0, displayViewLimit);
         const headName = ordered[0]?.name ?? key;
-        const readyCount = ordered.filter((item) => item.pose2d_exists && item.pose3d_exists).length;
-        const completedViews = readyCount === ordered.length ? readyCount : 0;
+        const readyCount = visible.filter((item) => item.pose2d_exists && item.pose3d_exists).length;
+        const completedViews = readyCount === visible.length ? readyCount : 0;
         return {
           key,
-          samples: ordered,
+          samples: visible,
           label: headName.replace(CAMERA_TOKEN_PATTERN, '_c*_'),
-          totalSizeBytes: ordered.reduce((sum, item) => sum + item.size_bytes, 0),
+          totalSizeBytes: visible.reduce((sum, item) => sum + item.size_bytes, 0),
+          generatedViews: readyCount,
           completedViews,
-          totalViews: ordered.length,
+          totalViews: visible.length,
         };
       })
       .sort((left, right) => left.label.localeCompare(right.label));
-  }, [sourcePreview]);
+  }, [displayViewLimit, sourcePreview]);
 
   useEffect(() => {
     if (sourceGroups.length === 0) {
@@ -448,9 +478,13 @@ export default function DemoPage() {
     () => playbackGroups.find((group) => group.key === selectedGroupKey) ?? playbackGroups[0] ?? null,
     [playbackGroups, selectedGroupKey],
   );
+  const currentGroupAllSamples = useMemo(
+    () => (currentGroup?.samples ?? []).slice(0, displayViewLimit),
+    [currentGroup, displayViewLimit],
+  );
   const currentGroupSamples = useMemo(
-    () => (currentGroup?.samples ?? []).slice(0, 3),
-    [currentGroup],
+    () => (currentGroup?.samples ?? []).slice(0, displayViewLimit),
+    [currentGroup, displayViewLimit],
   );
   const asyncTrainGroup = useMemo(() => {
     if (playbackGroups.length === 0) {
@@ -561,6 +595,7 @@ export default function DemoPage() {
       options: {
         showLoading?: boolean;
         updateError?: boolean;
+        onProgress?: (done: number, total: number) => void;
       } = {},
     ): Promise<{ missing: string[] }> => {
       if (!selectedDatasetId || samples.length === 0) {
@@ -576,12 +611,17 @@ export default function DemoPage() {
       }
 
       const missing: string[] = [];
+      const total = samples.length;
+      let done = 0;
+      options.onProgress?.(done, total);
       await Promise.all(
         samples.map(async (sample) => {
           const payload = await fetchPosePreviewForSample(sample);
           if (!payload) {
             missing.push(sample.path.split('/').at(-1) ?? sample.path);
           }
+          done += 1;
+          options.onProgress?.(done, total);
         }),
       );
 
@@ -597,17 +637,26 @@ export default function DemoPage() {
   );
 
   useEffect(() => {
-    if (!selectedDatasetId || currentGroupSamples.length === 0) {
+    if (!selectedDatasetId || currentGroupAllSamples.length === 0) {
       setPosePreviewLoading(false);
       setPosePreviewError('');
+      setGroupPrepareDone(0);
+      setGroupPrepareTotal(0);
       return;
     }
     let cancelled = false;
 
     const run = async () => {
-      const result = await ensureGroupPosePreview(currentGroupSamples, {
+      const result = await ensureGroupPosePreview(currentGroupAllSamples, {
         showLoading: true,
         updateError: true,
+        onProgress: (done, total) => {
+          if (cancelled) {
+            return;
+          }
+          setGroupPrepareDone(done);
+          setGroupPrepareTotal(total);
+        },
       });
       if (cancelled) {
         return;
@@ -621,7 +670,7 @@ export default function DemoPage() {
     return () => {
       cancelled = true;
     };
-  }, [currentGroupSamples, ensureGroupPosePreview, selectedDatasetId]);
+  }, [currentGroupAllSamples, ensureGroupPosePreview, selectedDatasetId]);
 
   const modelFiles = useMemo(
     () => artifactManifest?.files.filter((item) => item.kind === 'model').slice(0, 6) ?? [],
@@ -639,7 +688,7 @@ export default function DemoPage() {
   const curvesUrl = artifactStatus?.curves_exists ? `${backendBaseUrl}${artifactStatus.curves_url}` : '';
   const viewSlots = useMemo(
     () =>
-      [0, 1, 2].map((index) => {
+      Array.from({ length: displayViewLimit }, (_, index) => {
         const sample = currentGroupSamples[index] ?? null;
         if (!sample) {
           return {
@@ -661,7 +710,7 @@ export default function DemoPage() {
           cameraLabel: parseCameraLabel(sample),
         };
       }),
-    [currentGroupSamples, posePreviewMap],
+    [currentGroupSamples, displayViewLimit, posePreviewMap],
   );
 
   const syncPose3dVideoUrl = useMemo(() => {
@@ -710,6 +759,10 @@ export default function DemoPage() {
     activeViewSlots.length > 0 &&
     activeViewSlots.every((slot) => slot.sourceVideoUrl && slot.pose2dVideoUrl),
   );
+  const sourceColumnClasses = SOURCE_COLUMN_CLASSES_BY_LIMIT[displayViewLimit] ?? SOURCE_COLUMN_CLASSES_BY_LIMIT[DEFAULT_DISPLAY_VIEW_LIMIT];
+  const pose2dColumnClasses = POSE2D_COLUMN_CLASSES_BY_LIMIT[displayViewLimit] ?? POSE2D_COLUMN_CLASSES_BY_LIMIT[DEFAULT_DISPLAY_VIEW_LIMIT];
+  const syncGridClasses = GRID_CLASSES_BY_LIMIT[displayViewLimit] ?? GRID_CLASSES_BY_LIMIT[DEFAULT_DISPLAY_VIEW_LIMIT];
+  const pose3dCardClasses = POSE3D_CARD_CLASSES_BY_LIMIT[displayViewLimit] ?? POSE3D_CARD_CLASSES_BY_LIMIT[DEFAULT_DISPLAY_VIEW_LIMIT];
 
   const masterSourcePath = currentGroupSamples[0]?.path ?? '';
   const getMasterSourceVideo = useCallback(() => {
@@ -841,6 +894,10 @@ export default function DemoPage() {
   }, [getMasterSourceVideo, recomputeSyncDuration, syncFromMaster]);
 
   const handleSyncPlay = useCallback(async () => {
+    if (followTraining) {
+      setTrainHint('训练仍在进行，等待当前任务完成后再播放。');
+      return;
+    }
     const master = getMasterSourceVideo();
     if (!master) {
       return;
@@ -871,7 +928,7 @@ export default function DemoPage() {
     );
     syncFromMaster(true);
     setSyncPlaying(true);
-  }, [getMasterSourceVideo, getSyncVideos, syncFromMaster, syncPlaybackRate, syncSeekAll]);
+  }, [followTraining, getMasterSourceVideo, getSyncVideos, syncFromMaster, syncPlaybackRate, syncSeekAll]);
 
   const handleSyncPause = useCallback(() => {
     getSyncVideos().forEach((element) => {
@@ -894,14 +951,8 @@ export default function DemoPage() {
   );
 
   const handleMasterEnded = useCallback(() => {
-    if (followTraining && nextGroup) {
-      setAutoAdvancePending(true);
-      setSelectedGroupKey(nextGroup.key);
-      setTrainHint(`已切换下一组素材：${nextGroup.label}`);
-      return;
-    }
     handleSyncPause();
-  }, [followTraining, handleSyncPause, nextGroup]);
+  }, [handleSyncPause]);
 
   useEffect(() => {
     if (!syncPlaying) {
@@ -952,7 +1003,6 @@ export default function DemoPage() {
 
   useEffect(() => {
     autoPlayedJobRef.current = '';
-    autoPlayStartedRef.current = '';
   }, [selectedDatasetId]);
 
   useEffect(() => {
@@ -960,23 +1010,10 @@ export default function DemoPage() {
   }, [selectedDatasetId]);
 
   useEffect(() => {
-    if (!followTraining || !syncReady || syncPlaying) {
-      return;
-    }
-    const currentKey = `${followTrainJobId || 'running'}:${selectedGroupKey}`;
-    if (autoPlayStartedRef.current === currentKey) {
-      return;
-    }
-    autoPlayStartedRef.current = currentKey;
-    syncSeekAll(0);
-    void handleSyncPlay();
-  }, [followTrainJobId, followTraining, handleSyncPlay, selectedGroupKey, syncPlaying, syncReady, syncSeekAll]);
-
-  useEffect(() => {
     if (!syncPlaying || !nextGroup) {
       return;
     }
-    const targetSamples = nextGroup.samples.slice(0, 3);
+    const targetSamples = nextGroup.samples.slice(0, displayViewLimit);
     if (targetSamples.length === 0) {
       return;
     }
@@ -1191,26 +1228,29 @@ export default function DemoPage() {
   }, [refreshCore, selectedDataset?.train_config, selectedDatasetId]);
 
   const handleRegenerateCurrentGroup = useCallback(async () => {
-    if (!selectedDatasetId || currentGroupSamples.length === 0) {
+    if (!selectedDatasetId || currentGroupAllSamples.length === 0) {
       return;
     }
     setRegeneratingPose(true);
     setPosePreviewError('');
+    setGroupPrepareDone(0);
+    setGroupPrepareTotal(currentGroupAllSamples.length);
     try {
-      for (const sample of currentGroupSamples) {
+      for (const sample of currentGroupAllSamples) {
         delete posePreviewCacheRef.current[sample.path];
         delete posePreviewPendingRef.current[sample.path];
       }
       setPosePreviewMap((prev) => {
         const next = { ...prev };
-        for (const sample of currentGroupSamples) {
+        for (const sample of currentGroupAllSamples) {
           delete next[sample.path];
         }
         return next;
       });
 
+      let done = 0;
       const refreshed = await Promise.all(
-        currentGroupSamples.map(async (sample) => {
+        currentGroupAllSamples.map(async (sample) => {
           let payload: PosePreviewPayload | null = null;
           for (let attempt = 0; attempt < 3; attempt += 1) {
             try {
@@ -1222,6 +1262,8 @@ export default function DemoPage() {
               }
             }
           }
+          done += 1;
+          setGroupPrepareDone(done);
           return { path: sample.path, payload };
         }),
       );
@@ -1254,7 +1296,7 @@ export default function DemoPage() {
     } finally {
       setRegeneratingPose(false);
     }
-  }, [currentGroup?.label, currentGroupSamples, markSourcePreviewGenerated, selectedDatasetId]);
+  }, [currentGroup?.label, currentGroupAllSamples, markSourcePreviewGenerated, selectedDatasetId]);
 
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -1481,7 +1523,7 @@ export default function DemoPage() {
                 <Button
                   variant="outline"
                   onClick={() => void handleRegenerateCurrentGroup()}
-                  disabled={regeneratingPose || !selectedDatasetId || currentGroupSamples.length === 0}
+                  disabled={regeneratingPose || !selectedDatasetId || currentGroupAllSamples.length === 0}
                   className="gap-2"
                 >
                   <RefreshCw size={16} className={regeneratingPose ? 'animate-spin' : ''} />
@@ -1497,6 +1539,14 @@ export default function DemoPage() {
               <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                 <p className="text-xs font-bold uppercase tracking-wider text-zinc-500">素材组（同一动作不同 camera）</p>
                 <div className="flex items-center gap-2">
+                  <select
+                    value={displayViewLimit}
+                    onChange={(event) => setDisplayViewLimit(Number(event.target.value))}
+                    className="h-7 rounded-md border border-zinc-200 bg-white px-2 text-xs"
+                  >
+                    <option value={3}>显示 3 视角</option>
+                    <option value={4}>显示 4 视角</option>
+                  </select>
                   <Button variant="outline" size="sm" className="h-7 px-2 text-xs" onClick={selectAllGroups}>
                     全选
                   </Button>
@@ -1556,7 +1606,7 @@ export default function DemoPage() {
                           )}
                         </div>
                         <div className={`mt-1 text-xs ${selected ? 'text-zinc-200' : 'text-zinc-500'}`}>
-                          视角数 {group.samples.length} · 骨架 {group.completedViews}/{group.totalViews} · 体积 {formatBytes(group.totalSizeBytes)}
+                          视角数 {group.samples.length} · 骨架 {group.generatedViews}/{group.totalViews} · 体积 {formatBytes(group.totalSizeBytes)}
                         </div>
                       </div>
                     );
@@ -1582,16 +1632,27 @@ export default function DemoPage() {
 
             <div className="mb-4 rounded-xl border border-zinc-200 bg-stone-50 px-4 py-3">
               <div className="flex flex-wrap items-center gap-2">
-                <Button size="sm" onClick={() => void handleSyncPlay()} disabled={!syncReady} className="h-9">
+                <Button
+                  size="sm"
+                  onClick={() => void handleSyncPlay()}
+                  disabled={!syncReady || followTraining}
+                  className="h-9"
+                >
                   播放
                 </Button>
-                <Button size="sm" variant="outline" onClick={handleSyncPause} disabled={!syncReady} className="h-9">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handleSyncPause}
+                  disabled={!syncReady || followTraining}
+                  className="h-9"
+                >
                   暂停
                 </Button>
                 <select
                   value={syncPlaybackRate}
                   onChange={handleSyncRateChange}
-                  disabled={!syncReady}
+                  disabled={!syncReady || followTraining}
                   className="h-9 rounded-lg border border-zinc-200 bg-white px-2 text-sm"
                 >
                   <option value={0.5}>0.5x</option>
@@ -1603,6 +1664,11 @@ export default function DemoPage() {
                 {posePreviewLoading && (
                   <span className="rounded-md border border-zinc-200 bg-white px-2 py-1 text-xs text-zinc-500">
                     骨架生成中...
+                  </span>
+                )}
+                {followTraining && (
+                  <span className="rounded-md border border-sky-200 bg-sky-50 px-2 py-1 text-xs text-sky-700">
+                    训练进行中，播放锁定
                   </span>
                 )}
                 {!posePreviewLoading && posePreviewError && (
@@ -1617,6 +1683,21 @@ export default function DemoPage() {
                   {syncPlaying ? '（播放中）' : '（暂停）'}
                 </span>
               </div>
+              <div className="mt-2 flex items-center gap-2 text-xs text-zinc-600">
+                <span className="rounded-md border border-zinc-200 bg-white px-2 py-1">
+                  当前组骨架生成 {groupPrepareDone}/{groupPrepareTotal || currentGroupAllSamples.length}
+                </span>
+                <div className="h-1.5 flex-1 rounded-full bg-zinc-200">
+                  <div
+                    className="h-1.5 rounded-full bg-zinc-900 transition-all"
+                    style={{
+                      width: `${
+                        (groupPrepareTotal > 0 ? (groupPrepareDone / groupPrepareTotal) * 100 : 0).toFixed(2)
+                      }%`,
+                    }}
+                  />
+                </div>
+              </div>
               <input
                 type="range"
                 min={0}
@@ -1624,14 +1705,14 @@ export default function DemoPage() {
                 step={0.01}
                 value={Math.min(syncCurrentTime, syncDuration > 0 ? syncDuration : syncCurrentTime)}
                 onChange={(event) => syncSeekAll(Number(event.target.value))}
-                disabled={!syncReady}
+                disabled={!syncReady || followTraining}
                 className="mt-3 h-2 w-full accent-zinc-900"
               />
             </div>
 
-            <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-4 xl:auto-rows-[minmax(236px,auto)]">
+            <div className={syncGridClasses}>
               {viewSlots.map((slot, index) => (
-                <div key={`source-${index}`} className={`self-start rounded-xl border border-zinc-200 bg-stone-50 p-3 ${SOURCE_COLUMN_CLASSES[index]}`}>
+                <div key={`source-${index}`} className={`self-start rounded-xl border border-zinc-200 bg-stone-50 p-3 ${sourceColumnClasses[index] ?? ''}`}>
                   <h3 className="mb-2 text-sm font-bold text-zinc-800">
                     素材 {index + 1} · {slot.cameraLabel}
                   </h3>
@@ -1683,7 +1764,7 @@ export default function DemoPage() {
               ))}
 
               {viewSlots.map((slot, index) => (
-                <div key={`pose2d-${index}`} className={`self-start rounded-xl border border-zinc-200 bg-stone-50 p-3 ${POSE2D_COLUMN_CLASSES[index]}`}>
+                <div key={`pose2d-${index}`} className={`self-start rounded-xl border border-zinc-200 bg-stone-50 p-3 ${pose2dColumnClasses[index] ?? ''}`}>
                   <h3 className="mb-2 text-sm font-bold text-zinc-800">
                     2D骨架 {index + 1} · {slot.cameraLabel}
                   </h3>
@@ -1713,7 +1794,7 @@ export default function DemoPage() {
                 </div>
               ))}
 
-              <div className="self-stretch rounded-xl border border-zinc-200 bg-stone-50 p-3 xl:col-start-4 xl:row-start-1 xl:row-span-2">
+              <div className={pose3dCardClasses}>
                 <h3 className="mb-2 text-sm font-bold text-zinc-800">
                   3D骨架（融合）
                   {followTraining && asyncTrainGroup?.label && (

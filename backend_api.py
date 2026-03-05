@@ -415,6 +415,16 @@ def _resolve_gt_seq_id(gt_dir: Path, source_stem: str, source_name: str) -> str 
     return None
 
 
+def _resolve_existing_gt_seq_id(gt_dir: Path, candidates: list[str]) -> str | None:
+    for seq_id in candidates:
+        if not seq_id:
+            continue
+        seq_file = gt_dir / f"{seq_id}.npz"
+        if seq_file.exists():
+            return seq_id
+    return None
+
+
 def _load_keypoints2d(npz_path: Path) -> tuple[np.ndarray, float]:
     with np.load(npz_path) as data:
         if "keypoints2d" not in data.files:
@@ -614,7 +624,20 @@ def workspace_pose_preview(dataset_id: str, video_path: str, refresh: bool = Fal
     source_name = source_video.name
     source_stem = source_video.stem
 
+    fallback_seq_id = find_sequence_id(
+        yolo2d_dir=yolo_dir,
+        video_stem=source_stem,
+        source_video_name=source_name,
+    )
     gt_seq_id = _resolve_gt_seq_id(gt_dir=gt_dir, source_stem=source_stem, source_name=source_name)
+    if not gt_seq_id and fallback_seq_id:
+        gt_seq_id = _resolve_existing_gt_seq_id(
+            gt_dir=gt_dir,
+            candidates=[
+                fallback_seq_id,
+                CAMERA_TOKEN_PATTERN.sub("_cAll_", fallback_seq_id),
+            ],
+        )
     if not gt_seq_id:
         raise HTTPException(status_code=404, detail=f"未找到视频对应 3D 序列: {source_name}")
     gt_file = gt_dir / f"{gt_seq_id}.npz"
@@ -626,6 +649,7 @@ def workspace_pose_preview(dataset_id: str, video_path: str, refresh: bool = Fal
     preview_pose_cache_dir = ensure_dir(OUTPUT_ROOT / "preview_cache" / dataset_id / "pose2d_npz")
     source_pose2d_cache = preview_pose_cache_dir / f"{source_stem}.npz"
     source_pose2d_file = yolo_dir / f"{source_stem}.npz"
+    fallback_pose2d_file = yolo_dir / f"{fallback_seq_id}.npz" if fallback_seq_id else None
 
     keypoints2d: np.ndarray
     fps_value: float
@@ -633,6 +657,9 @@ def workspace_pose_preview(dataset_id: str, video_path: str, refresh: bool = Fal
     if source_pose2d_file.exists():
         keypoints2d, fps_value = _load_keypoints2d(source_pose2d_file)
         pose2d_dep_file = source_pose2d_file
+    elif fallback_pose2d_file is not None and fallback_pose2d_file.exists():
+        keypoints2d, fps_value = _load_keypoints2d(fallback_pose2d_file)
+        pose2d_dep_file = fallback_pose2d_file
     elif source_pose2d_cache.exists():
         keypoints2d, fps_value = _load_keypoints2d(source_pose2d_cache)
         pose2d_dep_file = source_pose2d_cache
@@ -646,19 +673,19 @@ def workspace_pose_preview(dataset_id: str, video_path: str, refresh: bool = Fal
                 source=np.array(source_name),
             )
             pose2d_dep_file = source_pose2d_cache
-        except Exception:
-            fallback_seq_id = find_sequence_id(
-                yolo2d_dir=yolo_dir,
-                video_stem=source_stem,
-                source_video_name=source_name,
-            )
+        except Exception as exc:
             if not fallback_seq_id:
-                raise HTTPException(status_code=404, detail=f"未找到视频对应 2D 关键点: {source_name}")
-            fallback_yolo_file = yolo_dir / f"{fallback_seq_id}.npz"
-            if not fallback_yolo_file.exists():
-                raise HTTPException(status_code=404, detail=f"未找到 2D 文件: seq_id={fallback_seq_id}")
-            keypoints2d, fps_value = _load_keypoints2d(fallback_yolo_file)
-            pose2d_dep_file = fallback_yolo_file
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"未找到视频对应 2D 关键点: {source_name}",
+                ) from exc
+            if fallback_pose2d_file is None or not fallback_pose2d_file.exists():
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"未找到 2D 文件: seq_id={fallback_seq_id}",
+                ) from exc
+            keypoints2d, fps_value = _load_keypoints2d(fallback_pose2d_file)
+            pose2d_dep_file = fallback_pose2d_file
 
     cache_dir = ensure_dir(OUTPUT_ROOT / "preview_cache" / dataset_id)
     output_2d = cache_dir / f"{source_stem}_pose2d.mp4"

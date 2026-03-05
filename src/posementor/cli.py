@@ -22,8 +22,13 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 LOCAL_CONFIG_FILE = PROJECT_ROOT / "configs" / "local.yaml"
 BACKEND_SERVICE = "backend_api"
 FRONTEND_SERVICE = "frontend"
+SERVICE_READY_TIMEOUT: dict[str, float] = {
+    BACKEND_SERVICE: 8.0,
+    FRONTEND_SERVICE: 20.0,
+}
 LEGACY_FRONTEND_PATTERNS = ("app_demo.py", "admin_console.py")
 VITE_PORT_PATTERN = re.compile(r"--port\s+(\d+)")
+BACKEND_PORT_PATTERN = re.compile(r"--port\s+(\d+)")
 VIDEO_CAMERA_PATTERN = re.compile(r"_c(\d+)_", re.IGNORECASE)
 AIST_VIDEO_PROFILES: dict[str, dict[str, Any]] = {
     "mv3_quick": {
@@ -439,8 +444,61 @@ def _stop_process(pid: int) -> None:
             stderr=subprocess.DEVNULL,
         )
         return
+    terminated = False
     try:
-        os.kill(pid, signal.SIGTERM)
+        os.killpg(pid, signal.SIGTERM)
+        terminated = True
+    except ProcessLookupError:
+        return
+    except PermissionError:
+        terminated = False
+    except OSError:
+        terminated = False
+
+    if not terminated:
+        subprocess.run(  # noqa: S603
+            ["pkill", "-TERM", "-P", str(pid)],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        try:
+            os.kill(pid, signal.SIGTERM)
+            terminated = True
+        except ProcessLookupError:
+            return
+        except PermissionError:
+            terminated = False
+        except OSError:
+            terminated = False
+
+    if not terminated:
+        return
+
+    deadline = time.time() + 1.6
+    while time.time() < deadline:
+        if not _is_pid_running(pid):
+            return
+        time.sleep(0.1)
+
+    try:
+        os.killpg(pid, signal.SIGKILL)
+        return
+    except ProcessLookupError:
+        return
+    except PermissionError:
+        pass
+    except OSError:
+        pass
+
+    subprocess.run(  # noqa: S603
+        ["pkill", "-KILL", "-P", str(pid)],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        os.kill(pid, signal.SIGKILL)
     except ProcessLookupError:
         return
 
@@ -511,13 +569,19 @@ def _start_service(local_cfg: dict[str, Any], service_name: str) -> int:
         )
 
     pid_path.write_text(str(process.pid), encoding="utf-8")
-    time.sleep(0.6)
-    if process.poll() is not None:
-        print(f"[ERROR] {service_name} 启动失败，请查看日志: {log_path}")
-        return 3
+    timeout = SERVICE_READY_TIMEOUT.get(service_name, 10.0)
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if process.poll() is not None:
+            print(f"[ERROR] {service_name} 启动失败，请查看日志: {log_path}")
+            return 3
+        if _service_health_ok(service_name, host, port):
+            print(f"[OK] {service_name} 已启动 (pid={process.pid})")
+            return 0
+        time.sleep(0.25)
 
-    print(f"[OK] {service_name} 已启动 (pid={process.pid})")
-    return 0
+    print(f"[ERROR] {service_name} 启动超时，请查看日志: {log_path}")
+    return 3
 
 
 def _stop_service(local_cfg: dict[str, Any], service_name: str) -> int:
@@ -585,12 +649,12 @@ def _service_health_ok(service_name: str, host: str, port: int) -> bool:
     return response.status in {200, 304}
 
 
-def _list_local_processes() -> list[tuple[int, str]]:
+def _list_local_processes() -> list[tuple[int, int, str]]:
     if platform.system() == "Windows":
         return []
     try:
         result = subprocess.run(  # noqa: S603
-            ["ps", "-ax", "-o", "pid=,command="],
+            ["ps", "-ax", "-o", "pid=,ppid=,command="],
             check=False,
             capture_output=True,
             text=True,
@@ -600,36 +664,71 @@ def _list_local_processes() -> list[tuple[int, str]]:
     if result.returncode != 0:
         return []
 
-    rows: list[tuple[int, str]] = []
+    rows: list[tuple[int, int, str]] = []
     for line in result.stdout.splitlines():
         text = line.strip()
         if not text:
             continue
-        parts = text.split(maxsplit=1)
-        if len(parts) < 2:
+        parts = text.split(maxsplit=2)
+        if len(parts) < 3:
             continue
         try:
             pid = int(parts[0])
+            ppid = int(parts[1])
         except ValueError:
             continue
         if pid == os.getpid():
             continue
-        rows.append((pid, parts[1]))
+        rows.append((pid, ppid, parts[2]))
     return rows
 
 
 def _legacy_pids(local_cfg: dict[str, Any]) -> list[tuple[int, str]]:
     rows = _list_local_processes()
     network_cfg = local_cfg.get("network", {})
+    configured_backend_port = int(network_cfg.get("backend_port", 8787))
     configured_frontend_port = int(network_cfg.get("frontend_port", 7860))
     project_text = str(PROJECT_ROOT)
+    _, pids_dir = _runtime_dirs(local_cfg)
+    managed_pids: set[int] = set()
+    for service_name in [BACKEND_SERVICE, FRONTEND_SERVICE]:
+        managed_pid = _read_pid(_pid_file(pids_dir, service_name))
+        if managed_pid is not None:
+            managed_pids.add(managed_pid)
+    managed_tree = set(managed_pids)
+    changed = True
+    while changed:
+        changed = False
+        for pid, ppid, _ in rows:
+            if pid in managed_tree:
+                continue
+            if ppid in managed_tree:
+                managed_tree.add(pid)
+                changed = True
     pids: list[tuple[int, str]] = []
 
-    for pid, command in rows:
+    for pid, _, command in rows:
+        if pid in managed_tree:
+            continue
         if project_text not in command:
             continue
 
         if any(pattern in command for pattern in LEGACY_FRONTEND_PATTERNS):
+            pids.append((pid, command))
+            continue
+
+        if "backend_api.py" in command:
+            match = BACKEND_PORT_PATTERN.search(command)
+            if match:
+                try:
+                    port = int(match.group(1))
+                except ValueError:
+                    port = configured_backend_port
+            else:
+                port = configured_backend_port
+            if port != configured_backend_port:
+                pids.append((pid, command))
+                continue
             pids.append((pid, command))
             continue
 
@@ -644,6 +743,8 @@ def _legacy_pids(local_cfg: dict[str, Any]) -> list[tuple[int, str]]:
                 port = configured_frontend_port
             if port != configured_frontend_port:
                 pids.append((pid, command))
+                continue
+            pids.append((pid, command))
     return pids
 
 
@@ -651,9 +752,9 @@ def _cleanup(local_cfg: dict[str, Any]) -> int:
     failed = False
     legacy = _legacy_pids(local_cfg)
     if not legacy:
-        print("[OK] 未发现历史前端进程")
+        print("[OK] 未发现历史服务进程")
     else:
-        print("=== 清理历史前端进程 ===")
+        print("=== 清理历史服务进程 ===")
         for pid, command in legacy:
             _stop_process(pid)
             time.sleep(0.2)
@@ -675,7 +776,13 @@ def _cleanup(local_cfg: dict[str, Any]) -> int:
         print(f"[OK] 已清理僵尸 PID 文件: {pid_path}")
 
     if failed:
-        print("[WARN] 部分进程未结束，请手动检查 `lsof -i :7861` / `lsof -i :7863`")
+        backend_host, backend_port = _service_host_port(local_cfg, BACKEND_SERVICE)
+        frontend_host, frontend_port = _service_host_port(local_cfg, FRONTEND_SERVICE)
+        print(
+            "[WARN] 部分进程未结束，请手动检查 "
+            f"`lsof -nP -iTCP:{backend_port} -sTCP:LISTEN` ({backend_host}) / "
+            f"`lsof -nP -iTCP:{frontend_port} -sTCP:LISTEN` ({frontend_host})"
+        )
         return 1
     return 0
 
@@ -1113,12 +1220,17 @@ def main() -> None:
             pid_path = _pid_file(pids_dir, service_name)
             pid = _read_pid(pid_path)
             status = "stopped"
+            host, port = _service_host_port(local_cfg, service_name)
             if pid is not None and _is_pid_running(pid):
-                status = "running"
+                if _service_health_ok(service_name, host, port):
+                    status = "running"
+                elif _port_is_occupied(host, port):
+                    status = "running(unhealthy)"
+                else:
+                    status = "stale-pid"
             elif pid is not None and pid_path.exists():
                 pid_path.unlink()
                 pid = None
-            host, port = _service_host_port(local_cfg, service_name)
             if status == "stopped" and _port_is_occupied(host, port) and _service_health_ok(service_name, host, port):
                 status = "running(external)"
             print(
