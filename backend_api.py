@@ -4,10 +4,12 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import cv2
 import numpy as np
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -105,6 +107,11 @@ class DatasetUpsertRequest(BaseModel):
 
 DATASET_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{2,64}$")
 CAMERA_TOKEN_PATTERN = re.compile(r"_c\d+_")
+PREVIEW_YOLO_WEIGHTS = os.environ.get("POSEMENTOR_PREVIEW_YOLO_WEIGHTS", "yolo11m-pose.pt")
+PREVIEW_YOLO_CONF = float(os.environ.get("POSEMENTOR_PREVIEW_YOLO_CONF", "0.35"))
+
+_preview_pose_model = None
+_preview_pose_model_lock = threading.Lock()
 
 
 def _read_dataset_registry() -> dict:
@@ -393,6 +400,73 @@ def _video_group_key(path: Path) -> str:
     return CAMERA_TOKEN_PATTERN.sub("_cAll_", stem)
 
 
+def _resolve_gt_seq_id(gt_dir: Path, source_stem: str, source_name: str) -> str | None:
+    direct = gt_dir / f"{source_stem}.npz"
+    if direct.exists():
+        return source_stem
+    call_stem = CAMERA_TOKEN_PATTERN.sub("_cAll_", source_stem)
+    call_file = gt_dir / f"{call_stem}.npz"
+    if call_file.exists():
+        return call_stem
+    # 兼容旧目录命名，退回到遍历查找。
+    for file_path in sorted(gt_dir.glob("*.npz")):
+        if file_path.stem.endswith(source_name.replace(".mp4", "")):
+            return file_path.stem
+    return None
+
+
+def _load_keypoints2d(npz_path: Path) -> tuple[np.ndarray, float]:
+    with np.load(npz_path) as data:
+        if "keypoints2d" not in data.files:
+            raise KeyError(f"{npz_path} 缺少 keypoints2d 字段")
+        keypoints2d = data["keypoints2d"].astype(np.float32)
+        fps_value = 0.0
+        if "fps" in data.files:
+            try:
+                fps_value = float(np.asarray(data["fps"]).reshape(-1)[0])
+            except Exception:
+                fps_value = 0.0
+    return keypoints2d, fps_value
+
+
+def _get_preview_pose_model():
+    global _preview_pose_model
+    if _preview_pose_model is not None:
+        return _preview_pose_model
+    with _preview_pose_model_lock:
+        if _preview_pose_model is None:
+            from ultralytics import YOLO
+
+            _preview_pose_model = YOLO(PREVIEW_YOLO_WEIGHTS)
+    return _preview_pose_model
+
+
+def _extract_pose2d_from_video(video_path: Path) -> tuple[np.ndarray, float]:
+    cap = cv2.VideoCapture(str(video_path))
+    fps = float(cap.get(cv2.CAP_PROP_FPS) or 30.0)
+    cap.release()
+
+    model = _get_preview_pose_model()
+    frames: list[np.ndarray] = []
+    for result in model.predict(
+        source=str(video_path),
+        stream=True,
+        conf=PREVIEW_YOLO_CONF,
+        verbose=False,
+    ):
+        if result.keypoints is None or len(result.keypoints) == 0:
+            frames.append(np.zeros((17, 3), dtype=np.float32))
+            continue
+        kp_xy = result.keypoints.xy.cpu().numpy()
+        kp_conf = result.keypoints.conf.cpu().numpy()
+        person_idx = int(np.argmax(kp_conf.mean(axis=1)))
+        kp = np.concatenate([kp_xy[person_idx], kp_conf[person_idx, :, None]], axis=-1)
+        frames.append(kp.astype(np.float32))
+    if not frames:
+        raise RuntimeError(f"视频无有效帧: {video_path}")
+    return np.stack(frames, axis=0), fps
+
+
 @app.get("/")
 def root() -> dict[str, str]:
     return {
@@ -452,6 +526,7 @@ def source_preview(dataset_id: str = "aistpp", limit: int = 3) -> dict[str, obje
     if not isinstance(dataset, dict):
         raise HTTPException(status_code=404, detail=f"dataset_id={dataset_id} 未注册")
     video_root = _resolve_dataset_video_root(_normalize_dataset_item(dataset))
+    preview_cache_dir = OUTPUT_ROOT / "preview_cache" / dataset_id
 
     samples: list[dict[str, object]] = []
     if video_root.exists():
@@ -472,6 +547,8 @@ def source_preview(dataset_id: str = "aistpp", limit: int = 3) -> dict[str, obje
                 if path.is_relative_to(DATA_ROOT):
                     rel_data = path.relative_to(DATA_ROOT).as_posix()
                     url = f"/data-files/{rel_data}"
+                pose2d_file = preview_cache_dir / f"{path.stem}_pose2d.mp4"
+                pose3d_file = preview_cache_dir / f"{path.stem}_pose3d.mp4"
                 samples.append(
                     {
                         "name": path.name,
@@ -480,6 +557,8 @@ def source_preview(dataset_id: str = "aistpp", limit: int = 3) -> dict[str, obje
                         "size_bytes": stat.st_size,
                         "group_key": group_key,
                         "camera_id": camera_id,
+                        "pose2d_exists": pose2d_file.exists(),
+                        "pose3d_exists": pose3d_file.exists(),
                     }
                 )
 
@@ -492,7 +571,7 @@ def source_preview(dataset_id: str = "aistpp", limit: int = 3) -> dict[str, obje
 
 @app.get("/workspace/pose-preview")
 @app.get("/api/workspace/pose-preview")
-def workspace_pose_preview(dataset_id: str, video_path: str) -> dict[str, object]:
+def workspace_pose_preview(dataset_id: str, video_path: str, refresh: bool = False) -> dict[str, object]:
     _assert_dataset_exists(dataset_id)
     dataset = _find_dataset(dataset_id)
     if not isinstance(dataset, dict):
@@ -524,39 +603,63 @@ def workspace_pose_preview(dataset_id: str, video_path: str) -> dict[str, object
 
     source_name = source_video.name
     source_stem = source_video.stem
-    seq_id = find_sequence_id(
-        yolo2d_dir=yolo_dir,
-        video_stem=source_stem,
-        source_video_name=source_name,
-    )
-    if not seq_id:
-        raise HTTPException(status_code=404, detail=f"未找到视频对应关键点: {source_name}")
 
-    yolo_file = yolo_dir / f"{seq_id}.npz"
-    gt_file = gt_dir / f"{seq_id}.npz"
-    if not yolo_file.exists() or not gt_file.exists():
-        raise HTTPException(status_code=404, detail=f"未找到序列配套文件: seq_id={seq_id}")
-
-    with np.load(yolo_file) as yolo_data:
-        keypoints2d = yolo_data["keypoints2d"].astype(np.float32)
-        fps_value = 0.0
-        if "fps" in yolo_data.files:
-            try:
-                fps_value = float(np.asarray(yolo_data["fps"]).reshape(-1)[0])
-            except Exception:
-                fps_value = 0.0
+    gt_seq_id = _resolve_gt_seq_id(gt_dir=gt_dir, source_stem=source_stem, source_name=source_name)
+    if not gt_seq_id:
+        raise HTTPException(status_code=404, detail=f"未找到视频对应 3D 序列: {source_name}")
+    gt_file = gt_dir / f"{gt_seq_id}.npz"
+    if not gt_file.exists():
+        raise HTTPException(status_code=404, detail=f"未找到 3D 文件: seq_id={gt_seq_id}")
     with np.load(gt_file) as gt_data:
         joints3d = gt_data["joints3d"].astype(np.float32)
+
+    preview_pose_cache_dir = ensure_dir(OUTPUT_ROOT / "preview_cache" / dataset_id / "pose2d_npz")
+    source_pose2d_cache = preview_pose_cache_dir / f"{source_stem}.npz"
+    source_pose2d_file = yolo_dir / f"{source_stem}.npz"
+
+    keypoints2d: np.ndarray
+    fps_value: float
+    pose2d_dep_file: Path
+    if source_pose2d_file.exists():
+        keypoints2d, fps_value = _load_keypoints2d(source_pose2d_file)
+        pose2d_dep_file = source_pose2d_file
+    elif source_pose2d_cache.exists():
+        keypoints2d, fps_value = _load_keypoints2d(source_pose2d_cache)
+        pose2d_dep_file = source_pose2d_cache
+    else:
+        try:
+            keypoints2d, fps_value = _extract_pose2d_from_video(source_video)
+            np.savez_compressed(
+                source_pose2d_cache,
+                keypoints2d=keypoints2d,
+                fps=np.array(fps_value, dtype=np.float32),
+                source=np.array(source_name),
+            )
+            pose2d_dep_file = source_pose2d_cache
+        except Exception:
+            fallback_seq_id = find_sequence_id(
+                yolo2d_dir=yolo_dir,
+                video_stem=source_stem,
+                source_video_name=source_name,
+            )
+            if not fallback_seq_id:
+                raise HTTPException(status_code=404, detail=f"未找到视频对应 2D 关键点: {source_name}")
+            fallback_yolo_file = yolo_dir / f"{fallback_seq_id}.npz"
+            if not fallback_yolo_file.exists():
+                raise HTTPException(status_code=404, detail=f"未找到 2D 文件: seq_id={fallback_seq_id}")
+            keypoints2d, fps_value = _load_keypoints2d(fallback_yolo_file)
+            pose2d_dep_file = fallback_yolo_file
 
     cache_dir = ensure_dir(OUTPUT_ROOT / "preview_cache" / dataset_id)
     output_2d = cache_dir / f"{source_stem}_pose2d.mp4"
     output_3d = cache_dir / f"{source_stem}_pose3d.mp4"
     source_mtime = source_video.stat().st_mtime
-    dep_mtime = max(yolo_file.stat().st_mtime, gt_file.stat().st_mtime, source_mtime)
-    need_render = True
+    dep_mtime = max(pose2d_dep_file.stat().st_mtime, gt_file.stat().st_mtime, source_mtime)
+    need_render = bool(refresh)
     if output_2d.exists() and output_3d.exists():
         output_mtime = min(output_2d.stat().st_mtime, output_3d.stat().st_mtime)
-        need_render = output_mtime < dep_mtime
+        if not need_render:
+            need_render = output_mtime < dep_mtime
 
     stats: dict[str, float] = {
         "fps": max(0.0, fps_value),
@@ -573,7 +676,7 @@ def workspace_pose_preview(dataset_id: str, video_path: str) -> dict[str, object
 
     return {
         "dataset_id": dataset_id,
-        "seq_id": seq_id,
+        "seq_id": gt_seq_id,
         "source_video_url": f"/data-files/{rel_data_video.as_posix()}",
         "pose2d_video_url": f"/outputs-files/preview_cache/{dataset_id}/{output_2d.name}",
         "pose3d_video_url": f"/outputs-files/preview_cache/{dataset_id}/{output_3d.name}",
