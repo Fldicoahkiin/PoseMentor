@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
+import json
 import os
 import platform
 import re
@@ -97,6 +99,35 @@ def _inspect_aist_videos(video_root: Path) -> dict[str, Any]:
     }
 
 
+def _resolve_aist_state_file(local_cfg: dict[str, Any]) -> Path:
+    defaults = local_cfg.get("defaults", {})
+    state_text = str(defaults.get("aist_download_state_file", "outputs/runtime/aist_download_state.json"))
+    state_path = Path(state_text)
+    if not state_path.is_absolute():
+        state_path = PROJECT_ROOT / state_path
+    return state_path
+
+
+def _read_aist_state(local_cfg: dict[str, Any]) -> dict[str, Any]:
+    state_path = _resolve_aist_state_file(local_cfg)
+    if not state_path.exists():
+        return {"path": str(state_path), "exists": False}
+    try:
+        payload = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"path": str(state_path), "exists": True, "parse_ok": False}
+    if not isinstance(payload, dict):
+        return {"path": str(state_path), "exists": True, "parse_ok": False}
+    payload["path"] = str(state_path)
+    payload["exists"] = True
+    payload["parse_ok"] = True
+    return payload
+
+
+def _module_exists(module_name: str) -> bool:
+    return importlib.util.find_spec(module_name) is not None
+
+
 def _profile_target_count(profile_id: str) -> str:
     profile = AIST_VIDEO_PROFILES[profile_id]
     group_limit = int(profile["group_limit"])
@@ -172,6 +203,30 @@ def _prompt_int(title: str, *, default: int) -> int:
         print("[WARN] 请输入数字")
 
 
+def _prompt_float(title: str, *, default: float) -> float:
+    while True:
+        raw = input(f"{title} [默认 {default:.1f}]: ").strip()
+        if not raw:
+            return default
+        try:
+            value = float(raw)
+        except ValueError:
+            print("[WARN] 请输入数字")
+            continue
+        if value <= 0:
+            print("[WARN] 数值必须大于 0")
+            continue
+        return value
+
+
+def _prompt_text(title: str, *, default: str = "") -> str:
+    suffix = f" [默认 {default}]" if default else ""
+    raw = input(f"{title}{suffix}: ").strip()
+    if raw:
+        return raw
+    return default
+
+
 def _bootstrap_tools(auto_install: bool) -> tuple[bool, list[str]]:
     rows: list[str] = []
     ok = True
@@ -205,9 +260,25 @@ def _run_aist_download_profile(
     profile_id: str,
     *,
     data_config: str | None = None,
+    ranges: str | None = None,
+    assume_speed_mbps: float | None = None,
+    retry: int | None = None,
+    resume_failed: bool | None = None,
 ) -> int:
     profile = AIST_VIDEO_PROFILES[profile_id]
-    data_cfg = data_config or str(local_cfg.get("defaults", {}).get("data_config", "configs/data.yaml"))
+    defaults = local_cfg.get("defaults", {})
+    data_cfg = data_config or str(defaults.get("data_config", "configs/data.yaml"))
+    ranges_text = ranges if ranges is not None else str(defaults.get("aist_video_ranges", "")).strip()
+    speed_value = (
+        float(assume_speed_mbps)
+        if assume_speed_mbps is not None
+        else float(defaults.get("aist_assume_speed_mbps", 10.0))
+    )
+    retry_value = int(retry) if retry is not None else int(defaults.get("aist_download_retry", 2))
+    state_file = str(defaults.get("aist_download_state_file", "outputs/runtime/aist_download_state.json"))
+    use_resume_failed = (
+        bool(resume_failed) if resume_failed is not None else bool(defaults.get("aist_resume_failed", False))
+    )
     script_args = [
         "--config",
         data_cfg,
@@ -218,9 +289,19 @@ def _run_aist_download_profile(
         ",".join(profile["camera_ids"]),
         "--min-cameras-per-group",
         str(profile["min_cameras_per_group"]),
+        "--assume-speed-mbps",
+        f"{max(0.1, speed_value):.1f}",
+        "--retry",
+        str(max(0, retry_value)),
+        "--state-file",
+        state_file,
     ]
     if int(profile["group_limit"]) > 0:
         script_args.extend(["--group-limit", str(profile["group_limit"])])
+    if ranges_text:
+        script_args.extend(["--ranges", ranges_text])
+    if use_resume_failed:
+        script_args.append("--resume-failed")
     return _run_python_script("download_and_prepare_aist.py", script_args)
 
 
@@ -255,6 +336,22 @@ def _run_config_wizard(local_cfg: dict[str, Any], args: argparse.Namespace) -> t
         profile_options,
         default_index=profile_options.index(current_profile),
     )
+    current_ranges = str(local_cfg.get("defaults", {}).get("aist_video_ranges", "")).strip()
+    print("\n可选下载区间示例：1-300,1200-1500（留空表示按 Profile 全量范围）")
+    selected_ranges = _prompt_text("输入下载区间", default=current_ranges)
+    current_speed = float(local_cfg.get("defaults", {}).get("aist_assume_speed_mbps", 10.0))
+    assume_speed = _prompt_float("估算网络速度 Mbps", default=current_speed)
+    current_retry = int(local_cfg.get("defaults", {}).get("aist_download_retry", 2))
+    download_retry = _prompt_int("下载失败重试次数", default=current_retry)
+    current_state_file = str(
+        local_cfg.get("defaults", {}).get(
+            "aist_download_state_file",
+            "outputs/runtime/aist_download_state.json",
+        )
+    )
+    state_file = _prompt_text("下载状态文件路径", default=current_state_file)
+    current_resume_failed = bool(local_cfg.get("defaults", {}).get("aist_resume_failed", False))
+    resume_failed = _prompt_yes_no("下载时默认启用失败续传", default=current_resume_failed)
     backend_port = _prompt_int("后端端口", default=int(args.backend_port))
     frontend_port = _prompt_int("前端端口", default=int(args.frontend_port))
 
@@ -267,6 +364,11 @@ def _run_config_wizard(local_cfg: dict[str, Any], args: argparse.Namespace) -> t
         "defaults.dataset_id": args.dataset_id,
         "defaults.standard_id": args.standard_id,
         "defaults.aist_video_profile": selected_profile,
+        "defaults.aist_video_ranges": selected_ranges,
+        "defaults.aist_assume_speed_mbps": assume_speed,
+        "defaults.aist_download_retry": download_retry,
+        "defaults.aist_download_state_file": state_file,
+        "defaults.aist_resume_failed": resume_failed,
     }
     download_now = _prompt_yes_no("是否立即按所选 Profile 下载 AIST 多机位素材？", default=False)
     return overrides, download_now
@@ -564,10 +666,10 @@ def _cleanup(local_cfg: dict[str, Any]) -> int:
     _, pids_dir = _runtime_dirs(local_cfg)
     for service_name in [BACKEND_SERVICE, FRONTEND_SERVICE]:
         pid_path = _pid_file(pids_dir, service_name)
-        pid = _read_pid(pid_path)
-        if pid is None:
+        service_pid = _read_pid(pid_path)
+        if service_pid is None:
             continue
-        if _is_pid_running(pid):
+        if _is_pid_running(service_pid):
             continue
         pid_path.unlink(missing_ok=True)
         print(f"[OK] 已清理僵尸 PID 文件: {pid_path}")
@@ -590,9 +692,22 @@ def _doctor(local_cfg: dict[str, Any]) -> int:
         )
     )
 
-    for cmd in ["uv", "node", "pnpm"]:
+    for cmd in ["uv", "node", "pnpm", "ffmpeg"]:
         exists = shutil.which(cmd) is not None
         checks.append((f"命令 {cmd}", exists, "已安装" if exists else "缺失"))
+
+    modules = [
+        "numpy",
+        "torch",
+        "lightning",
+        "ultralytics",
+        "cv2",
+        "fastapi",
+        "gradio",
+    ]
+    for module_name in modules:
+        installed = _module_exists(module_name)
+        checks.append((f"Python 包 {module_name}", installed, "可导入" if installed else "缺失"))
 
     checks.append(("本地配置", LOCAL_CONFIG_FILE.exists(), str(LOCAL_CONFIG_FILE)))
     checks.append(
@@ -623,6 +738,33 @@ def _doctor(local_cfg: dict[str, Any]) -> int:
     checks.append(("AIST 注释目录", annotations.exists(), str(annotations)))
     yolo_weights = PROJECT_ROOT / "yolo11m-pose.pt"
     checks.append(("YOLO 权重", yolo_weights.exists(), str(yolo_weights)))
+    video_stats = _inspect_aist_videos(PROJECT_ROOT / "data" / "raw" / "aistpp" / "videos")
+    checks.append(
+        (
+            "AIST 视频库",
+            video_stats["file_count"] > 0,
+            f"videos={video_stats['file_count']} groups={video_stats['group_count']}",
+        )
+    )
+
+    state_info = _read_aist_state(local_cfg)
+    state_exists = bool(state_info.get("exists"))
+    state_parse_ok = bool(state_info.get("parse_ok", state_exists))
+    state_path = str(state_info.get("path", _resolve_aist_state_file(local_cfg)))
+    state_detail = state_path if state_exists else f"{state_path} (未生成)"
+    checks.append(("下载状态文件", (not state_exists) or state_parse_ok, state_detail))
+    failed_count = int(state_info.get("failed_count", 0)) if state_parse_ok else 0
+    checks.append(
+        (
+            "下载失败待续传",
+            failed_count == 0,
+            f"failed={failed_count}",
+        )
+    )
+
+    disk_usage = shutil.disk_usage(PROJECT_ROOT)
+    free_gb = disk_usage.free / (1024**3)
+    checks.append(("磁盘可用空间", free_gb >= 30.0, f"{free_gb:.1f} GB"))
 
     print("=== PoseMentor Doctor ===")
     all_ok = True
@@ -643,14 +785,26 @@ def _doctor(local_cfg: dict[str, Any]) -> int:
         print("- 先安装 uv：https://docs.astral.sh/uv/")
     if "命令 node" in failed_items or "命令 pnpm" in failed_items:
         print("- 先安装 Node.js 20+ 和 pnpm，然后重跑 `uv run posementor init`")
+    if "命令 ffmpeg" in failed_items:
+        print("- 安装 ffmpeg（视频解码与导出必须）")
+    if any(item.startswith("Python 包 ") for item in failed_items):
+        print("- 先执行 `uv run posementor init` 或 `uv sync --group dev --group mac/windows/linux`")
     if "本地配置" in failed_items:
         print("- 先执行 `uv run posementor config` 生成本地配置")
     if "统一脚本入口" in failed_items:
         print("- 检查 `scripts/posementor.py` 是否存在，推荐使用 `python scripts/posementor.py` 执行 CLI")
     if "AIST 注释目录" in failed_items:
         print("- 执行 `uv run posementor quickstart --skip-train` 先准备数据")
+    if "AIST 视频库" in failed_items:
+        print("- 执行 `./pm config --download-now` 或 `./pm quickstart --download-videos` 下载视频")
     if "YOLO 权重" in failed_items:
         print("- 将 yolo11m-pose.pt 放在项目根目录，或先用官方2D流程训练")
+    if "下载状态文件" in failed_items:
+        print("- 状态文件不存在或损坏，建议重新执行一次视频下载生成状态")
+    if "下载失败待续传" in failed_items:
+        print("- 执行 `./pm resume-download` 仅续传失败视频")
+    if "磁盘可用空间" in failed_items:
+        print("- 建议至少预留 30GB 空间后再继续下载和训练")
 
     print("[WARN] 存在未通过项，请按上方提示处理")
     return 1
@@ -674,7 +828,12 @@ def _run_quickstart(local_cfg: dict[str, Any], args: argparse.Namespace) -> int:
         if selected_profile not in AIST_VIDEO_PROFILES:
             print(f"[ERROR] 未知视频 Profile: {selected_profile}")
             return 2
-        code = _run_aist_download_profile(local_cfg, selected_profile, data_config=data_cfg)
+        code = _run_aist_download_profile(
+            local_cfg,
+            selected_profile,
+            data_config=data_cfg,
+            resume_failed=args.resume_failed,
+        )
         if code != 0:
             return code
 
@@ -722,6 +881,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_config.add_argument("--dataset-id", default="aistpp")
     p_config.add_argument("--standard-id", default="private_action_core")
     p_config.add_argument("--aist-video-profile", choices=list(AIST_VIDEO_PROFILES.keys()), default="mv3_quick")
+    p_config.add_argument("--aist-video-ranges", default="", help="AIST 视频下载区间，如 1-300,600-900")
+    p_config.add_argument("--aist-assume-speed-mbps", type=float, default=10.0, help="下载估算速度（Mbps）")
+    p_config.add_argument("--aist-download-retry", type=int, default=2, help="单文件下载失败后的重试次数")
+    p_config.add_argument(
+        "--aist-download-state-file",
+        default="outputs/runtime/aist_download_state.json",
+        help="AIST 下载状态文件路径",
+    )
+    p_config.add_argument(
+        "--aist-resume-failed",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="配置默认是否启用失败续传",
+    )
     p_config.add_argument("--config-path", default=str(LOCAL_CONFIG_FILE))
     p_config.add_argument("--wizard", action="store_true", help="使用交互式 Config UI")
     p_config.add_argument("--plain", action="store_true", help="使用非交互模式写入配置")
@@ -752,10 +925,26 @@ def build_parser() -> argparse.ArgumentParser:
     p_quickstart.add_argument("--skip-data", action="store_true")
     p_quickstart.add_argument("--download-videos", action="store_true", help="按本地配置下载 AIST 多机位视频")
     p_quickstart.add_argument("--video-profile", default="", help="覆盖本地配置中的 AIST 视频下载 Profile")
+    p_quickstart.add_argument(
+        "--resume-failed",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="下载视频时是否仅续传上次失败项",
+    )
     p_quickstart.add_argument("--skip-extract", action="store_true")
     p_quickstart.add_argument("--skip-train", action="store_true")
     p_quickstart.add_argument("--export-onnx", action="store_true")
     p_quickstart.add_argument("--up", action="store_true", help="训练结束后自动启动前后端")
+
+    p_resume = sub.add_parser("resume-download", help="按本地状态文件续传 AIST 下载失败项")
+    p_resume.add_argument("--data-config", default="", help="覆盖数据配置文件路径")
+    p_resume.add_argument("--video-profile", default="", help="覆盖本地配置中的 AIST 视频下载 Profile")
+
+    p_quality = sub.add_parser("quality", help="运行全局代码质量与训练链路检查")
+    p_quality.add_argument("--full", action="store_true", help="启用完整质量检查（含 mypy）")
+    p_quality.add_argument("--strict", action="store_true", help="视觉/训练链路指标也作为失败条件")
+    p_quality.add_argument("--skip-tests", action="store_true", help="跳过 pytest 回归测试")
+    p_quality.add_argument("--skip-mypy", action="store_true", help="跳过 mypy 类型检查")
 
     return parser
 
@@ -786,6 +975,11 @@ def main() -> None:
                 "defaults.dataset_id": args.dataset_id,
                 "defaults.standard_id": args.standard_id,
                 "defaults.aist_video_profile": profile_id,
+                "defaults.aist_video_ranges": args.aist_video_ranges.strip(),
+                "defaults.aist_assume_speed_mbps": max(0.1, float(args.aist_assume_speed_mbps)),
+                "defaults.aist_download_retry": max(0, int(args.aist_download_retry)),
+                "defaults.aist_download_state_file": args.aist_download_state_file.strip(),
+                "defaults.aist_resume_failed": bool(args.aist_resume_failed),
             }
         if args.force:
             config_path, created = init_local_config(
@@ -816,8 +1010,36 @@ def main() -> None:
         )
         raise SystemExit(0)
 
+    if cmd == "resume-download":
+        defaults = local_cfg.get("defaults", {})
+        data_cfg = args.data_config or str(defaults.get("data_config", "configs/data.yaml"))
+        selected_profile = args.video_profile or str(defaults.get("aist_video_profile", "mv3_quick"))
+        if selected_profile not in AIST_VIDEO_PROFILES:
+            print(f"[ERROR] 未知视频 Profile: {selected_profile}")
+            raise SystemExit(2)
+        code = _run_aist_download_profile(
+            local_cfg,
+            selected_profile,
+            data_config=data_cfg,
+            resume_failed=True,
+        )
+        raise SystemExit(code)
+
     if cmd == "doctor":
         raise SystemExit(_doctor(local_cfg))
+
+    if cmd == "quality":
+        from posementor.quality import run_quality_suite
+
+        raise SystemExit(
+            run_quality_suite(
+                project_root=PROJECT_ROOT,
+                full=bool(args.full),
+                strict=bool(args.strict),
+                skip_tests=bool(args.skip_tests),
+                skip_mypy=bool(args.skip_mypy),
+            )
+        )
 
     if cmd == "init":
         init_local_config(Path(args.config_path), force=args.force_config)

@@ -203,6 +203,7 @@ uv run python visualize_multiview_report.py --manifest data/processed/multiview/
 ./pm config
 ./pm config --plain --force --download-now
 ./pm doctor
+./pm quality --full --strict
 ./pm init
 ./pm quickstart --download-videos --video-profile mv5_standard --epochs 1 --export-onnx --up
 ./pm status
@@ -216,6 +217,24 @@ uv run python visualize_multiview_report.py --manifest data/processed/multiview/
 uv run posementor config
 uv run posementor quickstart --download-videos --video-profile mv9_core --epochs 1
 ```
+
+## 代码质量检查（Ruff + pip-audit + Deepchecks）
+
+使用统一命令：
+
+```bash
+./pm quality
+uv run posementor quality
+```
+
+检查内容：
+- `ruff`：Python 静态扫描
+- `pip-audit`：依赖漏洞扫描
+- `deepchecks`：训练数据完整性扫描（默认读取 AIST 元数据，自动回退到训练历史 CSV）
+
+说明：
+- 报告输出：`artifacts/quality/deepchecks_report.html`
+- 当输入数据缺失或样本行数不足时，Deepchecks 会自动跳过并保留其它检查结果。
 
 ## Backend API
 

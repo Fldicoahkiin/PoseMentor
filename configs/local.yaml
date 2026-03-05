@@ -10,6 +10,11 @@ defaults:
   train_config: configs/train.yaml
   data_config: configs/data.yaml
   aist_video_profile: mv3_quick
+  aist_video_ranges: ''
+  aist_assume_speed_mbps: 10.0
+  aist_download_retry: 2
+  aist_download_state_file: outputs/runtime/aist_download_state.json
+  aist_resume_failed: false
 runtime:
   logs_dir: outputs/runtime/logs
   pids_dir: outputs/runtime/pids
