@@ -260,6 +260,25 @@ def _parse_job_progress(job: JobRecord, log_text: str) -> dict[str, object]:
     progress = 1.0 if status == "succeeded" else 0.0
     current_step = 0
     total_step = 0
+    train_step_matches = re.findall(
+        r"\[TRAIN_STEP\]\s*epoch=(\d+)(?:\s*/\s*(\d+))?\s*step=(\d+)\s*/\s*(\d+)",
+        log_text,
+    )
+    if train_step_matches:
+        epoch_now_raw, epoch_total_raw, step_now_raw, step_total_raw = train_step_matches[-1]
+        epoch_now = max(1, int(epoch_now_raw))
+        epoch_total = int(epoch_total_raw) if epoch_total_raw else 0
+        step_now = max(0, int(step_now_raw))
+        step_total = max(1, int(step_total_raw))
+        if epoch_total > 0:
+            total_step = epoch_total * step_total
+            current_step = min(total_step, (epoch_now - 1) * step_total + step_now)
+            progress = max(progress, min(1.0, current_step / max(1, total_step)))
+        else:
+            current_step = min(step_total, step_now)
+            total_step = step_total
+            progress = max(progress, min(1.0, current_step / max(1, total_step)))
+
     marker_matches = re.findall(r"\[PROGRESS\]\s*epoch=(\d+)(?:\s*/\s*(\d+))?", log_text)
     if marker_matches:
         current_raw, total_raw = marker_matches[-1]
@@ -276,6 +295,8 @@ def _parse_job_progress(job: JobRecord, log_text: str) -> dict[str, object]:
 
     if status == "failed":
         progress = max(0.0, min(1.0, progress))
+    elif status == "running" and progress <= 0.0 and log_text.strip():
+        progress = 0.01
 
     event_lines: list[str] = []
     for line in reversed(log_text.splitlines()):
@@ -425,7 +446,7 @@ def list_standards() -> dict:
 @app.get("/api/workspace/source-preview")
 def source_preview(dataset_id: str = "aistpp", limit: int = 3) -> dict[str, object]:
     _assert_dataset_exists(dataset_id)
-    bounded_limit = max(1, min(limit, 20))
+    bounded_limit = max(1, min(limit, 500))
 
     dataset = _find_dataset(dataset_id)
     if not isinstance(dataset, dict):

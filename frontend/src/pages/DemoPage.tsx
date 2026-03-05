@@ -134,8 +134,11 @@ export default function DemoPage() {
   const [followTraining, setFollowTraining] = useState(false);
   const [followTrainJobId, setFollowTrainJobId] = useState('');
   const [followProgress, setFollowProgress] = useState(0);
+  const [followCurrentStep, setFollowCurrentStep] = useState(0);
+  const [followTotalStep, setFollowTotalStep] = useState(0);
   const [trainHint, setTrainHint] = useState('');
   const [prefetchHint, setPrefetchHint] = useState('');
+  const [autoAdvancePending, setAutoAdvancePending] = useState(false);
   const autoPlayedJobRef = useRef('');
   const posePreviewCacheRef = useRef<Record<string, PosePreviewPayload>>({});
   const posePreviewPendingRef = useRef<Record<string, Promise<PosePreviewPayload | null>>>({});
@@ -146,6 +149,9 @@ export default function DemoPage() {
   const sourceVideoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
   const pose2dVideoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
   const pose3dVideoRef = useRef<HTMLVideoElement | null>(null);
+  const syncFrameRef = useRef<number | null>(null);
+  const syncCurrentTimeRef = useRef(0);
+  const syncUiUpdateAtRef = useRef(0);
 
   const refreshCore = useCallback(async () => {
     setLoading(true);
@@ -179,7 +185,7 @@ export default function DemoPage() {
     }
     setPreviewLoading(true);
     try {
-      const preview = await fetchSourcePreview(datasetId, 12);
+      const preview = await fetchSourcePreview(datasetId, 160);
       setSourcePreview(preview);
       setSelectedGroupKey('');
       posePreviewCacheRef.current = {};
@@ -615,6 +621,22 @@ export default function DemoPage() {
     }
   }, [getSyncVideos]);
 
+  const updateSyncCurrentTime = useCallback((nextTime: number, force: boolean) => {
+    const previous = syncCurrentTimeRef.current;
+    syncCurrentTimeRef.current = nextTime;
+    const now = window.performance.now();
+    if (!force) {
+      if (Math.abs(nextTime - previous) < 0.09 && now - syncUiUpdateAtRef.current < 180) {
+        return;
+      }
+      if (now - syncUiUpdateAtRef.current < 140) {
+        return;
+      }
+    }
+    syncUiUpdateAtRef.current = now;
+    setSyncCurrentTime(nextTime);
+  }, []);
+
   const syncFromMaster = useCallback(
     (force: boolean) => {
       const master = getMasterSourceVideo();
@@ -622,9 +644,12 @@ export default function DemoPage() {
         return;
       }
       const sourceTime = master.currentTime;
-      const tolerance = force ? 0.01 : 0.08;
+      const tolerance = force ? 0.01 : 0.025;
       getSyncVideos().forEach((element) => {
         if (element === master) {
+          return;
+        }
+        if (element.readyState < 1) {
           return;
         }
         if (Math.abs(element.currentTime - sourceTime) > tolerance) {
@@ -637,9 +662,9 @@ export default function DemoPage() {
           element.pause();
         }
       });
-      setSyncCurrentTime(sourceTime);
+      updateSyncCurrentTime(sourceTime, force);
     },
-    [getMasterSourceVideo, getSyncVideos],
+    [getMasterSourceVideo, getSyncVideos, updateSyncCurrentTime],
   );
 
   const syncSeekAll = useCallback((timeSeconds: number) => {
@@ -648,8 +673,8 @@ export default function DemoPage() {
         element.currentTime = timeSeconds;
       }
     });
-    setSyncCurrentTime(timeSeconds);
-  }, [getSyncVideos]);
+    updateSyncCurrentTime(timeSeconds, true);
+  }, [getSyncVideos, updateSyncCurrentTime]);
 
   const syncSetRateAll = useCallback(
     (rate: number) => {
@@ -663,9 +688,16 @@ export default function DemoPage() {
   const handleSyncLoadedMetadata = useCallback(
     (video: HTMLVideoElement) => {
       video.playbackRate = syncPlaybackRate;
+      const anchorTime = syncCurrentTimeRef.current;
+      if (anchorTime > 0.01 && Math.abs(video.currentTime - anchorTime) > 0.02) {
+        video.currentTime = anchorTime;
+      }
+      if (syncPlaying && video.paused) {
+        void video.play().catch(() => undefined);
+      }
       recomputeSyncDuration();
     },
-    [recomputeSyncDuration, syncPlaybackRate],
+    [recomputeSyncDuration, syncPlaybackRate, syncPlaying],
   );
 
   const handleSourceTimeUpdate = useCallback(() => {
@@ -706,6 +738,10 @@ export default function DemoPage() {
     getSyncVideos().forEach((element) => {
       element.pause();
     });
+    if (syncFrameRef.current !== null) {
+      window.cancelAnimationFrame(syncFrameRef.current);
+      syncFrameRef.current = null;
+    }
     setSyncPlaying(false);
   }, [getSyncVideos]);
 
@@ -726,24 +762,61 @@ export default function DemoPage() {
     [syncSetRateAll],
   );
 
+  const handleMasterEnded = useCallback(() => {
+    if (followTraining && nextGroup) {
+      setAutoAdvancePending(true);
+      setSelectedGroupKey(nextGroup.key);
+      setTrainHint(`已切换下一组素材：${nextGroup.label}`);
+      return;
+    }
+    handleSyncPause();
+  }, [followTraining, handleSyncPause, nextGroup]);
+
   useEffect(() => {
     if (!syncPlaying) {
       return undefined;
     }
-    const timer = window.setInterval(() => {
+    let cancelled = false;
+    const loop = () => {
+      if (cancelled) {
+        return;
+      }
       syncFromMaster(false);
-    }, 120);
-    return () => window.clearInterval(timer);
+      syncFrameRef.current = window.requestAnimationFrame(loop);
+    };
+    syncFrameRef.current = window.requestAnimationFrame(loop);
+    return () => {
+      cancelled = true;
+      if (syncFrameRef.current !== null) {
+        window.cancelAnimationFrame(syncFrameRef.current);
+        syncFrameRef.current = null;
+      }
+    };
   }, [syncFromMaster, syncPlaying]);
+
+  useEffect(() => {
+    if (!autoAdvancePending || !syncReady) {
+      return;
+    }
+    setAutoAdvancePending(false);
+    syncSeekAll(0);
+    void handleSyncPlay();
+  }, [autoAdvancePending, handleSyncPlay, syncReady, syncSeekAll]);
 
   useEffect(() => {
     setSyncCurrentTime(0);
     setSyncDuration(0);
     setSyncPlaying(false);
     setPrefetchHint('');
+    syncCurrentTimeRef.current = 0;
+    syncUiUpdateAtRef.current = 0;
     sourceVideoRefs.current = {};
     pose2dVideoRefs.current = {};
     pose3dVideoRef.current = null;
+    if (syncFrameRef.current !== null) {
+      window.cancelAnimationFrame(syncFrameRef.current);
+      syncFrameRef.current = null;
+    }
   }, [selectedDatasetId, selectedGroupKey]);
 
   useEffect(() => {
@@ -751,7 +824,11 @@ export default function DemoPage() {
   }, [selectedDatasetId]);
 
   useEffect(() => {
-    if (followTraining || !syncPlaying || !nextGroup) {
+    setAutoAdvancePending(false);
+  }, [selectedDatasetId]);
+
+  useEffect(() => {
+    if (!syncPlaying || !nextGroup) {
       return;
     }
     const targetSamples = nextGroup.samples.slice(0, 3);
@@ -778,7 +855,7 @@ export default function DemoPage() {
     return () => {
       cancelled = true;
     };
-  }, [ensureGroupPosePreview, followTraining, nextGroup, syncPlaying]);
+  }, [ensureGroupPosePreview, nextGroup, syncPlaying]);
 
   useEffect(() => {
     if (followTraining) {
@@ -816,6 +893,8 @@ export default function DemoPage() {
         }
         const progressValue = Number.isFinite(progress.progress) ? progress.progress : 0;
         setFollowProgress(progressValue);
+        setFollowCurrentStep(Math.max(0, Number(progress.current_step) || 0));
+        setFollowTotalStep(Math.max(0, Number(progress.total_step) || 0));
         const now = Date.now();
         setProgressWatchTs(now);
         if (progressValue >= progressValueRef.current + 0.001) {
@@ -857,6 +936,7 @@ export default function DemoPage() {
 
     if (currentJob.status === 'succeeded') {
       setFollowProgress(1);
+      setFollowCurrentStep((prev) => (followTotalStep > 0 ? followTotalStep : prev));
       setFollowTraining(false);
       setTrainHint(
         syncReady
@@ -873,14 +953,7 @@ export default function DemoPage() {
       return;
     }
 
-  }, [
-    followTrainJobId,
-    followTraining,
-    handleSyncPlay,
-    jobs,
-    syncReady,
-    syncSeekAll,
-  ]);
+  }, [followTotalStep, followTrainJobId, followTraining, handleSyncPlay, jobs, syncReady, syncSeekAll]);
 
   const trainingStalled = useMemo(() => {
     if (!followTraining || followProgress >= 0.999) {
@@ -891,6 +964,22 @@ export default function DemoPage() {
     }
     return progressWatchTs - progressUpdatedAt > TRAIN_PROGRESS_STALL_MS;
   }, [followProgress, followTraining, progressUpdatedAt, progressWatchTs]);
+  const progressPercent = useMemo(() => {
+    const raw = Math.max(0, Math.min(100, followProgress * 100));
+    if (followTraining && raw < 1) {
+      return 2;
+    }
+    return raw;
+  }, [followProgress, followTraining]);
+  const followStepLabel = useMemo(() => {
+    if (followTotalStep > 0) {
+      return `${Math.min(followCurrentStep, followTotalStep)}/${followTotalStep}`;
+    }
+    if (followTraining) {
+      return '等待批次指标';
+    }
+    return '-';
+  }, [followCurrentStep, followTotalStep, followTraining]);
 
   useEffect(() => {
     if (!latestTrainJob || latestTrainJob.status !== 'succeeded') {
@@ -930,6 +1019,8 @@ export default function DemoPage() {
       setFollowTraining(true);
       setFollowTrainJobId(jobId);
       setFollowProgress(0);
+      setFollowCurrentStep(0);
+      setFollowTotalStep(0);
       progressValueRef.current = 0;
       const now = Date.now();
       setProgressUpdatedAt(now);
@@ -954,10 +1045,6 @@ export default function DemoPage() {
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button onClick={() => void handleStartTraining()} disabled={trainSubmitting || !selectedDatasetId} className="gap-2">
-              <LoaderCircle size={16} className={trainSubmitting ? 'animate-spin' : ''} />
-              开始训练
-            </Button>
             <Button variant="outline" onClick={() => void refreshCore()} disabled={loading} className="gap-2">
               <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
               刷新状态
@@ -984,12 +1071,16 @@ export default function DemoPage() {
             <div className="text-sm font-semibold text-zinc-800">
               {followTraining ? '训练进行中' : '训练完成'}
             </div>
-            <div className="text-xs font-semibold text-zinc-600">{(followProgress * 100).toFixed(1)}%</div>
+            <div className="text-xs font-semibold text-zinc-600">
+              {(followProgress * 100).toFixed(1)}% · {followStepLabel}
+            </div>
           </div>
           <div className="h-2 w-full rounded-full bg-zinc-200">
             <div
-              className={`h-2 rounded-full transition-all ${trainingStalled ? 'bg-amber-500' : 'bg-zinc-900'}`}
-              style={{ width: `${Math.max(0, Math.min(100, followProgress * 100))}%` }}
+              className={`h-2 rounded-full transition-all ${trainingStalled ? 'bg-amber-500' : 'bg-zinc-900'} ${
+                followTraining && followProgress < 0.01 ? 'animate-pulse' : ''
+              }`}
+              style={{ width: `${progressPercent}%` }}
             />
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
@@ -1116,49 +1207,35 @@ export default function DemoPage() {
                   视频根目录：<span className="font-semibold text-zinc-900">{sourcePreview?.video_root || '-'}</span>
                 </div>
               </div>
-              <div className="mt-3 rounded-xl border border-zinc-200 bg-stone-50 p-3">
-                <p className="mb-2 text-xs font-bold uppercase tracking-wider text-zinc-500">素材组（同一动作不同 camera）</p>
-                <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">
-                  {sourceGroups.slice(0, 9).map((group) => (
-                    <button
-                      key={group.key}
-                      onClick={() => setSelectedGroupKey(group.key)}
-                      className={`rounded-lg border px-3 py-2 text-left text-xs ${
-                        selectedGroupKey === group.key
-                          ? 'border-zinc-900 bg-zinc-900 text-white'
-                          : 'border-zinc-200 bg-white text-zinc-700 hover:bg-stone-100'
-                      }`}
+              <div className="mt-3 rounded-xl border border-zinc-200 bg-stone-50 px-3 py-2">
+                <p className="mb-2 text-xs font-bold uppercase tracking-wider text-zinc-500">流程状态</p>
+                <div className="grid grid-cols-1 gap-2 xl:grid-cols-3">
+                  {pipelineSteps.map((step) => (
+                    <div
+                      key={step.name}
+                      className="rounded-lg border border-zinc-200 bg-white px-2.5 py-2"
+                      title={step.detail}
                     >
-                      <p className="truncate font-semibold">{group.label}</p>
-                      <p className={`${selectedGroupKey === group.key ? 'text-zinc-300' : 'text-zinc-500'}`}>
-                        视角数 {group.samples.length} · {formatBytes(group.totalSizeBytes)}
-                      </p>
-                    </button>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="truncate text-xs font-semibold text-zinc-800">{step.name}</span>
+                        <span
+                          className={`rounded-md px-1.5 py-0.5 text-[11px] font-semibold ${
+                            step.status === 'ready'
+                              ? 'bg-emerald-100 text-emerald-700'
+                              : step.status === 'running'
+                                ? 'bg-amber-100 text-amber-700'
+                                : step.status === 'error'
+                                  ? 'bg-rose-100 text-rose-700'
+                                  : 'bg-zinc-200 text-zinc-600'
+                          }`}
+                        >
+                          {step.status}
+                        </span>
+                      </div>
+                      <p className="mt-1 truncate text-[11px] text-zinc-500">{step.detail}</p>
+                    </div>
                   ))}
                 </div>
-              </div>
-              <div className="mt-3 grid grid-cols-1 gap-2 lg:grid-cols-2">
-                {pipelineSteps.map((step) => (
-                  <div key={step.name} className="rounded-xl border border-zinc-200 bg-stone-50 px-3 py-2">
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-sm font-semibold text-zinc-800">{step.name}</span>
-                      <span
-                        className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
-                          step.status === 'ready'
-                            ? 'bg-emerald-100 text-emerald-700'
-                            : step.status === 'running'
-                              ? 'bg-amber-100 text-amber-700'
-                              : step.status === 'error'
-                                ? 'bg-rose-100 text-rose-700'
-                                : 'bg-zinc-200 text-zinc-600'
-                        }`}
-                      >
-                        {step.status}
-                      </span>
-                    </div>
-                    <p className="mt-1 text-xs text-zinc-500">{step.detail}</p>
-                  </div>
-                ))}
               </div>
             </div>
 
@@ -1168,6 +1245,54 @@ export default function DemoPage() {
                 <Film size={18} />
                 四联同步可视化
               </h2>
+              <Button onClick={() => void handleStartTraining()} disabled={trainSubmitting || !selectedDatasetId} className="gap-2">
+                <LoaderCircle size={16} className={trainSubmitting ? 'animate-spin' : ''} />
+                开始训练
+              </Button>
+            </div>
+            <div className="mb-4 rounded-xl border border-zinc-200 bg-stone-50 p-3">
+              <p className="mb-2 text-xs font-bold uppercase tracking-wider text-zinc-500">素材组（同一动作不同 camera）</p>
+              <div className="max-h-56 overflow-auto rounded-lg border border-zinc-200 bg-white">
+                <table className="w-full min-w-[520px] border-collapse text-xs">
+                  <thead className="sticky top-0 bg-zinc-100 text-zinc-600">
+                    <tr>
+                      <th className="border-b border-zinc-200 px-3 py-2 text-left font-semibold">文件组</th>
+                      <th className="border-b border-zinc-200 px-3 py-2 text-left font-semibold">视角数</th>
+                      <th className="border-b border-zinc-200 px-3 py-2 text-left font-semibold">体积</th>
+                      <th className="border-b border-zinc-200 px-3 py-2 text-left font-semibold">状态</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sourceGroups.length > 0 ? (
+                      sourceGroups.map((group) => {
+                        const selected = selectedGroupKey === group.key;
+                        return (
+                          <tr
+                            key={group.key}
+                            onClick={() => setSelectedGroupKey(group.key)}
+                            className={`cursor-pointer border-b border-zinc-100 ${
+                              selected ? 'bg-zinc-900 text-white' : 'text-zinc-700 hover:bg-stone-100'
+                            }`}
+                          >
+                            <td className="max-w-[320px] truncate px-3 py-2 font-medium">{group.label}</td>
+                            <td className="px-3 py-2">{group.samples.length}</td>
+                            <td className="px-3 py-2">{formatBytes(group.totalSizeBytes)}</td>
+                            <td className="px-3 py-2">{selected ? '已选中' : '可选'}</td>
+                          </tr>
+                        );
+                      })
+                    ) : (
+                      <tr>
+                        <td colSpan={4} className="px-3 py-8 text-center text-zinc-500">
+                          暂无可用素材
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-2 text-xs text-zinc-500">
                 <span className="rounded-md border border-zinc-200 bg-stone-50 px-2 py-1">
                   视频根目录：{sourcePreview?.video_root || '未检测到'}
@@ -1212,7 +1337,9 @@ export default function DemoPage() {
                   </span>
                 )}
                 <span className="ml-auto text-xs text-zinc-600">
-                  {formatClock(syncCurrentTime)} / {formatClock(syncDuration)} · 训练进度 {(followProgress * 100).toFixed(1)}%
+                  {formatClock(syncCurrentTime)} / {formatClock(syncDuration)} · 训练进度 {(followProgress * 100).toFixed(1)}% ·
+                  {' '}
+                  {followStepLabel}
                   {syncPlaying ? '（播放中）' : '（暂停）'}
                 </span>
               </div>
@@ -1242,9 +1369,10 @@ export default function DemoPage() {
                           sourceVideoRefs.current[slot.sample.path] = node;
                         }
                       }}
-                      controls={index === 0}
+                      controls={false}
                       preload="metadata"
                       playsInline
+                      muted
                       onLoadedMetadata={(event) => handleSyncLoadedMetadata(event.currentTarget)}
                       onTimeUpdate={() => {
                         if (index === 0) {
@@ -1264,16 +1392,16 @@ export default function DemoPage() {
                       }}
                       onEnded={() => {
                         if (index === 0) {
-                          handleSyncPause();
+                          handleMasterEnded();
                         }
                       }}
-                      className="h-[240px] w-full rounded-lg border border-zinc-200 bg-black object-contain xl:h-[30vh]"
+                      className="aspect-video w-full rounded-lg border border-zinc-200 bg-zinc-100 object-cover"
                     >
                       <source src={slot.sourceVideoUrl} type="video/mp4" />
                       当前浏览器无法播放视频，请检查编解码格式。
                     </video>
                   ) : (
-                    <div className="flex h-[240px] items-center justify-center rounded-lg border border-dashed border-zinc-300 bg-white text-sm text-zinc-500 xl:h-[30vh]">
+                    <div className="flex aspect-video w-full items-center justify-center rounded-lg border border-dashed border-zinc-300 bg-white text-sm text-zinc-500">
                       {previewLoading ? '正在加载素材...' : '当前分组无该视角素材'}
                     </div>
                   )}
@@ -1296,14 +1424,15 @@ export default function DemoPage() {
                       controls={false}
                       preload="metadata"
                       playsInline
+                      muted
                       onLoadedMetadata={(event) => handleSyncLoadedMetadata(event.currentTarget)}
-                      className="h-[240px] w-full rounded-lg border border-zinc-200 bg-black object-contain xl:h-[30vh]"
+                      className="aspect-video w-full rounded-lg border border-zinc-200 bg-zinc-100 object-cover"
                     >
                       <source src={slot.pose2dVideoUrl} type="video/mp4" />
                       当前浏览器无法播放视频，请检查编解码格式。
                     </video>
                   ) : (
-                    <div className="flex h-[240px] items-center justify-center rounded-lg border border-dashed border-zinc-300 bg-white text-sm text-zinc-500 xl:h-[30vh]">
+                    <div className="flex aspect-video w-full items-center justify-center rounded-lg border border-dashed border-zinc-300 bg-white text-sm text-zinc-500">
                       {posePreviewLoading ? '正在生成 2D 骨架...' : '当前视角暂无 2D 骨架'}
                     </div>
                   )}
@@ -1319,14 +1448,15 @@ export default function DemoPage() {
                     controls={false}
                     preload="metadata"
                     playsInline
+                    muted
                     onLoadedMetadata={(event) => handleSyncLoadedMetadata(event.currentTarget)}
-                    className="h-[500px] w-full rounded-lg border border-zinc-200 bg-black object-contain xl:h-[62vh]"
+                    className="h-full min-h-[520px] w-full rounded-lg border border-zinc-200 bg-zinc-100 object-cover"
                   >
                     <source src={syncPose3dVideoUrl} type="video/mp4" />
                     当前浏览器无法播放视频，请检查编解码格式。
                   </video>
                 ) : (
-                  <div className="flex h-[500px] items-center justify-center rounded-lg border border-dashed border-zinc-300 bg-white text-sm text-zinc-500 xl:h-[62vh]">
+                  <div className="flex h-full min-h-[520px] items-center justify-center rounded-lg border border-dashed border-zinc-300 bg-white text-sm text-zinc-500">
                     {posePreviewLoading ? '正在生成 3D 骨架...' : '当前分组暂无 3D 骨架'}
                   </div>
                 )}
@@ -1336,9 +1466,14 @@ export default function DemoPage() {
             <div className="mt-4 rounded-xl border border-zinc-200 bg-stone-50 p-3">
               <h3 className="mb-2 text-sm font-bold text-zinc-800">训练曲线</h3>
               {artifactStatus?.curves_exists ? (
-                <iframe title="训练曲线" src={curvesUrl} className="h-[260px] w-full rounded-lg border border-zinc-200 bg-white lg:h-[34vh]" />
+                <iframe
+                  title="训练曲线"
+                  src={curvesUrl}
+                  scrolling="no"
+                  className="h-[540px] w-full overflow-hidden rounded-lg border border-zinc-200 bg-white"
+                />
               ) : (
-                <div className="flex h-[260px] items-center justify-center rounded-lg border border-dashed border-zinc-300 bg-white text-sm text-zinc-500 lg:h-[34vh]">
+                <div className="flex h-[540px] items-center justify-center rounded-lg border border-dashed border-zinc-300 bg-white text-sm text-zinc-500">
                   暂无训练曲线，请先执行训练任务
                 </div>
               )}

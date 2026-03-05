@@ -9,7 +9,7 @@ import lightning as L
 import numpy as np
 import torch
 import yaml
-from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint
+from lightning.pytorch.callbacks import Callback, LearningRateMonitor, ModelCheckpoint
 from lightning.pytorch.loggers import CSVLogger
 from torch.utils.data import DataLoader
 
@@ -92,6 +92,35 @@ class LiftLightningModule(L.LightningModule):
                 "interval": "epoch",
             },
         }
+
+
+class TrainStepProgressCallback(Callback):
+    def __init__(self, log_every_n_steps: int = 25) -> None:
+        super().__init__()
+        self.log_every_n_steps = max(1, int(log_every_n_steps))
+
+    def on_train_batch_end(  # type: ignore[override]
+        self,
+        trainer: L.Trainer,
+        pl_module: L.LightningModule,
+        outputs: object,
+        batch: object,
+        batch_idx: int,
+    ) -> None:
+        if trainer.sanity_checking:
+            return
+        total_batches = int(getattr(trainer, "num_training_batches", 0) or 0)
+        if total_batches <= 0:
+            return
+        step_now = int(batch_idx) + 1
+        if step_now not in {1, total_batches} and step_now % self.log_every_n_steps != 0:
+            return
+        epoch_now = int(getattr(trainer, "current_epoch", 0) or 0) + 1
+        epoch_total = int(getattr(trainer, "max_epochs", 0) or 0)
+        if epoch_total > 0:
+            print(f"[TRAIN_STEP] epoch={epoch_now}/{epoch_total} step={step_now}/{total_batches}")
+        else:
+            print(f"[TRAIN_STEP] epoch={epoch_now} step={step_now}/{total_batches}")
 
 
 def parse_args() -> argparse.Namespace:
@@ -263,6 +292,7 @@ def main() -> None:
         mean_2d=mean_2d,
         std_2d=std_2d,
     )
+    progress_cb = TrainStepProgressCallback(log_every_n_steps=max(5, len(train_loader) // 20))
 
     max_epochs = int(train_cfg["epochs"]) if args.epochs <= 0 else args.epochs
     trainer_accelerator = train_cfg.get("accelerator", "auto")
@@ -282,7 +312,7 @@ def main() -> None:
         devices=train_cfg.get("devices", "auto"),
         precision=trainer_precision,
         log_every_n_steps=10,
-        callbacks=[ckpt_cb, LearningRateMonitor(logging_interval="epoch"), viz_cb],
+        callbacks=[ckpt_cb, LearningRateMonitor(logging_interval="epoch"), progress_cb, viz_cb],
         logger=logger,
     )
 
