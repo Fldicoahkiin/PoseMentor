@@ -17,6 +17,9 @@ class JobRunner:
         self.store = store
         self.cwd = cwd
         self.max_workers = max(1, int(max_workers))
+        interrupted = self.store.mark_interrupted_jobs()
+        if interrupted > 0:
+            print(f"[INFO] 已标记 {interrupted} 个历史运行中任务为中断状态")
         self._queue: queue.Queue[tuple[str, list[str], dict[str, str]]] = queue.Queue()
         self._workers: list[threading.Thread] = []
         for idx in range(self.max_workers):
@@ -50,13 +53,17 @@ class JobRunner:
             log_file.flush()
 
             try:
+                process_env = dict(os.environ)
+                process_env.setdefault("PYTHONUNBUFFERED", "1")
+                if env:
+                    process_env.update(env)
                 process = subprocess.Popen(
                     command,
                     cwd=str(self.cwd),
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
-                    env={**os.environ, **env} if env else None,
+                    env=process_env,
                 )
             except Exception as exc:  # noqa: BLE001
                 self.store.update(

@@ -89,3 +89,20 @@ class JobStore:
     def list_jobs(self) -> list[JobRecord]:
         with self._lock:
             return sorted(self._jobs.values(), key=lambda x: x.created_at, reverse=True)
+
+    def mark_interrupted_jobs(self, message: str = "服务重启，中断运行") -> int:
+        with self._lock:
+            updated = 0
+            now = time.time()
+            for record in self._jobs.values():
+                if record.status != "running":
+                    continue
+                record.status = "failed"
+                record.finished_at = now
+                if record.return_code is None:
+                    record.return_code = -2
+                record.error_message = message
+                updated += 1
+            if updated > 0:
+                self._save()
+            return updated

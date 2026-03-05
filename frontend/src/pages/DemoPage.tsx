@@ -140,6 +140,7 @@ export default function DemoPage() {
   const [prefetchHint, setPrefetchHint] = useState('');
   const [autoAdvancePending, setAutoAdvancePending] = useState(false);
   const autoPlayedJobRef = useRef('');
+  const autoPlayStartedRef = useRef('');
   const posePreviewCacheRef = useRef<Record<string, PosePreviewPayload>>({});
   const posePreviewPendingRef = useRef<Record<string, Promise<PosePreviewPayload | null>>>({});
   const previewDatasetRef = useRef('');
@@ -821,11 +822,25 @@ export default function DemoPage() {
 
   useEffect(() => {
     autoPlayedJobRef.current = '';
+    autoPlayStartedRef.current = '';
   }, [selectedDatasetId]);
 
   useEffect(() => {
     setAutoAdvancePending(false);
   }, [selectedDatasetId]);
+
+  useEffect(() => {
+    if (!followTraining || !syncReady || syncPlaying) {
+      return;
+    }
+    const currentKey = `${followTrainJobId || 'running'}:${selectedGroupKey}`;
+    if (autoPlayStartedRef.current === currentKey) {
+      return;
+    }
+    autoPlayStartedRef.current = currentKey;
+    syncSeekAll(0);
+    void handleSyncPlay();
+  }, [followTrainJobId, followTraining, handleSyncPlay, selectedGroupKey, syncPlaying, syncReady, syncSeekAll]);
 
   useEffect(() => {
     if (!syncPlaying || !nextGroup) {
@@ -971,6 +986,13 @@ export default function DemoPage() {
     }
     return raw;
   }, [followProgress, followTraining]);
+  const progressTextPercent = useMemo(() => {
+    const raw = Math.max(0, Math.min(100, followProgress * 100));
+    if (followTraining && followCurrentStep > 0 && raw < 0.1) {
+      return 0.1;
+    }
+    return raw;
+  }, [followCurrentStep, followProgress, followTraining]);
   const followStepLabel = useMemo(() => {
     if (followTotalStep > 0) {
       return `${Math.min(followCurrentStep, followTotalStep)}/${followTotalStep}`;
@@ -1072,7 +1094,7 @@ export default function DemoPage() {
               {followTraining ? '训练进行中' : '训练完成'}
             </div>
             <div className="text-xs font-semibold text-zinc-600">
-              {(followProgress * 100).toFixed(1)}% · {followStepLabel}
+              {progressTextPercent.toFixed(1)}% · {followStepLabel}
             </div>
           </div>
           <div className="h-2 w-full rounded-full bg-zinc-200">
@@ -1252,44 +1274,40 @@ export default function DemoPage() {
             </div>
             <div className="mb-4 rounded-xl border border-zinc-200 bg-stone-50 p-3">
               <p className="mb-2 text-xs font-bold uppercase tracking-wider text-zinc-500">素材组（同一动作不同 camera）</p>
-              <div className="max-h-56 overflow-auto rounded-lg border border-zinc-200 bg-white">
-                <table className="w-full min-w-[520px] border-collapse text-xs">
-                  <thead className="sticky top-0 bg-zinc-100 text-zinc-600">
-                    <tr>
-                      <th className="border-b border-zinc-200 px-3 py-2 text-left font-semibold">文件组</th>
-                      <th className="border-b border-zinc-200 px-3 py-2 text-left font-semibold">视角数</th>
-                      <th className="border-b border-zinc-200 px-3 py-2 text-left font-semibold">体积</th>
-                      <th className="border-b border-zinc-200 px-3 py-2 text-left font-semibold">状态</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {sourceGroups.length > 0 ? (
-                      sourceGroups.map((group) => {
-                        const selected = selectedGroupKey === group.key;
-                        return (
-                          <tr
-                            key={group.key}
-                            onClick={() => setSelectedGroupKey(group.key)}
-                            className={`cursor-pointer border-b border-zinc-100 ${
-                              selected ? 'bg-zinc-900 text-white' : 'text-zinc-700 hover:bg-stone-100'
+              <div role="radiogroup" className="max-h-56 space-y-2 overflow-auto rounded-lg border border-zinc-200 bg-white p-2">
+                {sourceGroups.length > 0 ? (
+                  sourceGroups.map((group) => {
+                    const selected = selectedGroupKey === group.key;
+                    return (
+                      <button
+                        key={group.key}
+                        type="button"
+                        role="radio"
+                        aria-checked={selected}
+                        onClick={() => setSelectedGroupKey(group.key)}
+                        className={`w-full rounded-lg border px-3 py-2 text-left transition ${
+                          selected
+                            ? 'border-zinc-900 bg-zinc-900 text-white'
+                            : 'border-zinc-200 bg-stone-50 text-zinc-700 hover:bg-zinc-100'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={`h-3.5 w-3.5 rounded-full border ${
+                              selected ? 'border-white bg-white/90' : 'border-zinc-400 bg-white'
                             }`}
-                          >
-                            <td className="max-w-[320px] truncate px-3 py-2 font-medium">{group.label}</td>
-                            <td className="px-3 py-2">{group.samples.length}</td>
-                            <td className="px-3 py-2">{formatBytes(group.totalSizeBytes)}</td>
-                            <td className="px-3 py-2">{selected ? '已选中' : '可选'}</td>
-                          </tr>
-                        );
-                      })
-                    ) : (
-                      <tr>
-                        <td colSpan={4} className="px-3 py-8 text-center text-zinc-500">
-                          暂无可用素材
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
+                          />
+                          <span className="truncate text-sm font-semibold">{group.label}</span>
+                        </div>
+                        <div className={`mt-1 text-xs ${selected ? 'text-zinc-200' : 'text-zinc-500'}`}>
+                          视角数 {group.samples.length} · 体积 {formatBytes(group.totalSizeBytes)}
+                        </div>
+                      </button>
+                    );
+                  })
+                ) : (
+                  <div className="px-3 py-8 text-center text-sm text-zinc-500">暂无可用素材</div>
+                )}
               </div>
             </div>
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -1337,7 +1355,7 @@ export default function DemoPage() {
                   </span>
                 )}
                 <span className="ml-auto text-xs text-zinc-600">
-                  {formatClock(syncCurrentTime)} / {formatClock(syncDuration)} · 训练进度 {(followProgress * 100).toFixed(1)}% ·
+                  {formatClock(syncCurrentTime)} / {formatClock(syncDuration)} · 训练进度 {progressTextPercent.toFixed(1)}% ·
                   {' '}
                   {followStepLabel}
                   {syncPlaying ? '（播放中）' : '（暂停）'}

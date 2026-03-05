@@ -246,7 +246,8 @@ def main() -> None:
 
     num_workers = int(train_cfg["num_workers"]) if args.num_workers < 0 else args.num_workers
     if is_macos:
-        num_workers = min(num_workers, 2)
+        # macOS 下多进程 DataLoader 在长序列视频训练时更容易卡在首个 batch，优先稳定性。
+        num_workers = 0
     pin_memory = torch.cuda.is_available()
     batch_size = int(train_cfg["batch_size"])
     if is_macos and has_mps:
@@ -258,6 +259,7 @@ def main() -> None:
         num_workers=num_workers,
         shuffle=True,
         pin_memory=pin_memory,
+        persistent_workers=num_workers > 0,
     )
     val_loader = DataLoader(
         val_ds,
@@ -265,6 +267,7 @@ def main() -> None:
         num_workers=num_workers,
         shuffle=False,
         pin_memory=pin_memory,
+        persistent_workers=num_workers > 0,
     )
 
     model_module = LiftLightningModule(
