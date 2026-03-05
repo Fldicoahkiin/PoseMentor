@@ -538,6 +538,7 @@ def source_preview(dataset_id: str = "aistpp", limit: int = 3) -> dict[str, obje
 
         selected_keys = sorted(grouped.keys())[:bounded_limit]
         for group_key in selected_keys:
+            group_rows: list[dict[str, object]] = []
             for path in sorted(grouped[group_key]):
                 camera_match = re.search(r"_c(\d+)_", path.stem)
                 camera_id = f"c{camera_match.group(1)}" if camera_match else ""
@@ -549,7 +550,7 @@ def source_preview(dataset_id: str = "aistpp", limit: int = 3) -> dict[str, obje
                     url = f"/data-files/{rel_data}"
                 pose2d_file = preview_cache_dir / f"{path.stem}_pose2d.mp4"
                 pose3d_file = preview_cache_dir / f"{path.stem}_pose3d.mp4"
-                samples.append(
+                group_rows.append(
                     {
                         "name": path.name,
                         "path": rel_project,
@@ -561,6 +562,15 @@ def source_preview(dataset_id: str = "aistpp", limit: int = 3) -> dict[str, obje
                         "pose3d_exists": pose3d_file.exists(),
                     }
                 )
+            group_ready = all(
+                bool(row.get("pose2d_exists")) and bool(row.get("pose3d_exists"))
+                for row in group_rows
+            )
+            if not group_ready:
+                for row in group_rows:
+                    row["pose2d_exists"] = False
+                    row["pose3d_exists"] = False
+            samples.extend(group_rows)
 
     return {
         "dataset_id": dataset_id,

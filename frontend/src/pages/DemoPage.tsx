@@ -46,6 +46,8 @@ const CAMERA_TOKEN_PATTERN = /_c(\d+)_/i;
 const SOURCE_COLUMN_CLASSES = ['xl:col-start-1 xl:row-start-1', 'xl:col-start-2 xl:row-start-1', 'xl:col-start-3 xl:row-start-1'];
 const POSE2D_COLUMN_CLASSES = ['xl:col-start-1 xl:row-start-2', 'xl:col-start-2 xl:row-start-2', 'xl:col-start-3 xl:row-start-2'];
 const TRAIN_PROGRESS_STALL_MS = 20_000;
+const SYNC_DRIFT_TOLERANCE = 0.12;
+const SYNC_TICK_MS = 140;
 
 function formatBytes(sizeBytes: number): string {
   if (sizeBytes < 1024) {
@@ -346,7 +348,8 @@ export default function DemoPage() {
       .map(([key, samples]) => {
         const ordered = [...samples].sort((left, right) => left.name.localeCompare(right.name));
         const headName = ordered[0]?.name ?? key;
-        const completedViews = ordered.filter((item) => item.pose2d_exists && item.pose3d_exists).length;
+        const readyCount = ordered.filter((item) => item.pose2d_exists && item.pose3d_exists).length;
+        const completedViews = readyCount === ordered.length ? readyCount : 0;
         return {
           key,
           samples: ordered,
@@ -507,34 +510,44 @@ export default function DemoPage() {
         return pending;
       }
 
-      const task = fetchPosePreview(datasetId, sample.path)
-        .then((payload) => {
-          if (previewDatasetRef.current !== datasetId) {
-            return null;
+      const task = (async () => {
+        let payload: PosePreviewPayload | null = null;
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          try {
+            payload = await fetchPosePreview(datasetId, sample.path);
+            break;
+          } catch (err) {
+            if (attempt === 1) {
+              console.error(err);
+            } else {
+              await new Promise((resolve) => window.setTimeout(resolve, 300));
+            }
           }
-          posePreviewCacheRef.current = {
-            ...posePreviewCacheRef.current,
+        }
+        if (!payload) {
+          return null;
+        }
+        if (previewDatasetRef.current !== datasetId) {
+          return null;
+        }
+        posePreviewCacheRef.current = {
+          ...posePreviewCacheRef.current,
+          [sample.path]: payload,
+        };
+        setPosePreviewMap((prev) => {
+          if (prev[sample.path]) {
+            return prev;
+          }
+          return {
+            ...prev,
             [sample.path]: payload,
           };
-          setPosePreviewMap((prev) => {
-            if (prev[sample.path]) {
-              return prev;
-            }
-            return {
-              ...prev,
-              [sample.path]: payload,
-            };
-          });
-          markSourcePreviewGenerated(sample.path);
-          return payload;
-        })
-        .catch((err) => {
-          console.error(err);
-          return null;
-        })
-        .finally(() => {
-          delete posePreviewPendingRef.current[sample.path];
         });
+        markSourcePreviewGenerated(sample.path);
+        return payload;
+      })().finally(() => {
+        delete posePreviewPendingRef.current[sample.path];
+      });
 
       posePreviewPendingRef.current[sample.path] = task;
       return task;
@@ -573,7 +586,7 @@ export default function DemoPage() {
       );
 
       if (updateError && missing.length > 0) {
-        setPosePreviewError(`部分视角未生成骨架：${missing.join('、')}`);
+        setPosePreviewError(`当前组生成未完成：${missing.join('、')}`);
       }
       if (showLoading) {
         setPosePreviewLoading(false);
@@ -657,6 +670,10 @@ export default function DemoPage() {
       if (payload?.pose3d_video_url) {
         return `${backendBaseUrl}${payload.pose3d_video_url}`;
       }
+    }
+    const cachedAny = Object.values(posePreviewMap).find((payload) => payload?.pose3d_video_url);
+    if (cachedAny?.pose3d_video_url) {
+      return `${backendBaseUrl}${cachedAny.pose3d_video_url}`;
     }
     if (artifactStatus?.sample_3d_video_exists && artifactStatus.sample_3d_video_url) {
       return `${backendBaseUrl}${artifactStatus.sample_3d_video_url}`;
@@ -752,7 +769,7 @@ export default function DemoPage() {
         return;
       }
       const sourceTime = master.currentTime;
-      const tolerance = force ? 0.008 : 0.045;
+      const tolerance = force ? 0.02 : SYNC_DRIFT_TOLERANCE;
       getSyncVideos().forEach((element) => {
         if (element === master) {
           return;
@@ -760,17 +777,21 @@ export default function DemoPage() {
         if (element.readyState < 2) {
           return;
         }
-        if (Math.abs(element.currentTime - sourceTime) > tolerance) {
+        const drift = Math.abs(element.currentTime - sourceTime);
+        if (drift > tolerance) {
           if (typeof element.fastSeek === 'function') {
             element.fastSeek(sourceTime);
           } else {
             element.currentTime = sourceTime;
           }
         }
+        if (syncPlaying && element.paused) {
+          void element.play().catch(() => undefined);
+        }
       });
       updateSyncCurrentTime(sourceTime, force);
     },
-    [getMasterSourceVideo, getSyncVideos, updateSyncCurrentTime],
+    [getMasterSourceVideo, getSyncVideos, syncPlaying, updateSyncCurrentTime],
   );
 
   const syncSeekAll = useCallback((timeSeconds: number) => {
@@ -802,17 +823,12 @@ export default function DemoPage() {
       if (anchorTime > 0.01 && Math.abs(video.currentTime - anchorTime) > 0.02) {
         video.currentTime = anchorTime;
       }
-      const master = getMasterSourceVideo();
-      if (syncPlaying && master) {
-        if (master === video && video.paused) {
-          void video.play().catch(() => undefined);
-        } else if (!video.paused) {
-          video.pause();
-        }
+      if (syncPlaying && video.paused) {
+        void video.play().catch(() => undefined);
       }
       recomputeSyncDuration();
     },
-    [getMasterSourceVideo, recomputeSyncDuration, syncPlaybackRate, syncPlaying],
+    [recomputeSyncDuration, syncPlaybackRate, syncPlaying],
   );
 
   const handleSourceTimeUpdate = useCallback(() => {
@@ -830,11 +846,10 @@ export default function DemoPage() {
       return;
     }
     const videos = getSyncVideos();
+    const anchorTime = syncCurrentTimeRef.current;
+    syncSeekAll(anchorTime);
     for (const element of videos) {
       element.playbackRate = syncPlaybackRate;
-      if (element !== master && !element.paused) {
-        element.pause();
-      }
     }
     try {
       await master.play();
@@ -843,9 +858,20 @@ export default function DemoPage() {
       setSyncPlaying(false);
       return;
     }
+    await Promise.all(
+      videos
+        .filter((element) => element !== master)
+        .map(async (element) => {
+          try {
+            await element.play();
+          } catch {
+            // keep master playback when some tracks cannot autoplay immediately
+          }
+        }),
+    );
     syncFromMaster(true);
     setSyncPlaying(true);
-  }, [getMasterSourceVideo, getSyncVideos, syncFromMaster, syncPlaybackRate]);
+  }, [getMasterSourceVideo, getSyncVideos, syncFromMaster, syncPlaybackRate, syncSeekAll]);
 
   const handleSyncPause = useCallback(() => {
     getSyncVideos().forEach((element) => {
@@ -890,7 +916,7 @@ export default function DemoPage() {
     }
     syncTickerRef.current = window.setInterval(() => {
       syncFromMaster(false);
-    }, 80);
+    }, SYNC_TICK_MS);
     return () => {
       if (syncTickerRef.current !== null) {
         window.clearInterval(syncTickerRef.current);
@@ -1135,10 +1161,10 @@ export default function DemoPage() {
       return;
     }
     const trainConfigPath = selectedDataset?.train_config?.trim() || 'configs/train.yaml';
-      setTrainSubmitting(true);
-      setTrainHint('');
-      setTrainEvents([]);
-      setPrefetchHint('');
+    setTrainSubmitting(true);
+    setTrainHint('');
+    setTrainEvents([]);
+    setPrefetchHint('');
     autoPlayedJobRef.current = '';
     try {
       const jobId = await createTrainJob({
@@ -1185,12 +1211,18 @@ export default function DemoPage() {
 
       const refreshed = await Promise.all(
         currentGroupSamples.map(async (sample) => {
-          try {
-            const payload = await fetchPosePreview(selectedDatasetId, sample.path, true);
-            return { path: sample.path, payload };
-          } catch {
-            return { path: sample.path, payload: null };
+          let payload: PosePreviewPayload | null = null;
+          for (let attempt = 0; attempt < 3; attempt += 1) {
+            try {
+              payload = await fetchPosePreview(selectedDatasetId, sample.path, true);
+              break;
+            } catch {
+              if (attempt < 2) {
+                await new Promise((resolve) => window.setTimeout(resolve, 450));
+              }
+            }
           }
+          return { path: sample.path, payload };
         }),
       );
 
@@ -1483,18 +1515,14 @@ export default function DemoPage() {
                       ? '训练中'
                       : group.completedViews >= group.totalViews
                         ? '已完成'
-                        : group.completedViews > 0
-                          ? '部分完成'
-                          : '未生成';
+                        : '未生成';
                     const statusClass = selected
                       ? 'border border-white/40 bg-white/10 text-white'
                       : isTraining
                         ? 'border border-sky-200 bg-sky-50 text-sky-700'
                         : group.completedViews >= group.totalViews
                           ? 'border border-emerald-200 bg-emerald-50 text-emerald-700'
-                          : group.completedViews > 0
-                            ? 'border border-amber-200 bg-amber-50 text-amber-700'
-                            : 'border border-zinc-200 bg-white text-zinc-600';
+                          : 'border border-zinc-200 bg-white text-zinc-600';
                     return (
                       <div
                         key={group.key}
@@ -1589,6 +1617,16 @@ export default function DemoPage() {
                   {syncPlaying ? '（播放中）' : '（暂停）'}
                 </span>
               </div>
+              <input
+                type="range"
+                min={0}
+                max={syncDuration > 0 ? syncDuration : 1}
+                step={0.01}
+                value={Math.min(syncCurrentTime, syncDuration > 0 ? syncDuration : syncCurrentTime)}
+                onChange={(event) => syncSeekAll(Number(event.target.value))}
+                disabled={!syncReady}
+                className="mt-3 h-2 w-full accent-zinc-900"
+              />
             </div>
 
             <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-4 xl:auto-rows-[minmax(236px,auto)]">
@@ -1678,6 +1716,11 @@ export default function DemoPage() {
               <div className="self-stretch rounded-xl border border-zinc-200 bg-stone-50 p-3 xl:col-start-4 xl:row-start-1 xl:row-span-2">
                 <h3 className="mb-2 text-sm font-bold text-zinc-800">
                   3D骨架（融合）
+                  {followTraining && asyncTrainGroup?.label && (
+                    <span className="ml-2 rounded-md border border-sky-200 bg-sky-50 px-1.5 py-0.5 text-[11px] font-semibold text-sky-700">
+                      训练中：{asyncTrainGroup.label}
+                    </span>
+                  )}
                   {syncPose3dIsFallback && (
                     <span className="ml-2 rounded-md border border-zinc-300 bg-white px-1.5 py-0.5 text-[11px] font-semibold text-zinc-600">
                       回退样例
@@ -1700,7 +1743,11 @@ export default function DemoPage() {
                   </video>
                 ) : (
                   <div className="flex h-[472px] w-full items-center justify-center rounded-lg border border-dashed border-zinc-300 bg-white text-sm text-zinc-500">
-                    {posePreviewLoading ? '正在生成 3D 骨架...' : '当前分组暂无 3D 骨架'}
+                    {posePreviewLoading
+                      ? '正在生成 3D 骨架...'
+                      : followTraining && asyncTrainGroup?.label
+                        ? `当前分组暂无 3D 骨架，正在训练：${asyncTrainGroup.label}`
+                        : '当前分组暂无 3D 骨架'}
                   </div>
                 )}
               </div>
