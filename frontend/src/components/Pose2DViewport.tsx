@@ -19,7 +19,12 @@ type Pose2DViewportProps = {
 
 const PAD_X = 18;
 const PAD_Y = 16;
-const JOINT_RADIUS = 4.5;
+const JOINT_RADIUS_MIN = 1.8;
+const JOINT_RADIUS_MAX = 3.0;
+const JOINT_RADIUS_RATIO = 0.0085;
+const EDGE_WIDTH_MIN = 1.3;
+const EDGE_WIDTH_MAX = 2.4;
+const EDGE_WIDTH_RATIO = 0.0068;
 const CONFIDENCE_THRESHOLD = 0.05;
 const BG_COLOR = '#f7f4ef';
 const EDGE_COLOR = '#8f5f43';
@@ -53,6 +58,9 @@ function drawViewport(ctx: CanvasRenderingContext2D, width: number, height: numb
   const renderHeight = data.frame_height * scale;
   const offsetX = (width - renderWidth) * 0.5;
   const offsetY = (height - renderHeight) * 0.5;
+  const minSide = Math.min(width, height);
+  const edgeWidth = clamp(minSide * EDGE_WIDTH_RATIO, EDGE_WIDTH_MIN, EDGE_WIDTH_MAX);
+  const jointRadius = clamp(minSide * JOINT_RADIUS_RATIO, JOINT_RADIUS_MIN, JOINT_RADIUS_MAX);
 
   const points = frame.map((joint) => ({
     x: offsetX + joint[0] * scale,
@@ -63,7 +71,7 @@ function drawViewport(ctx: CanvasRenderingContext2D, width: number, height: numb
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
   ctx.strokeStyle = EDGE_COLOR;
-  ctx.lineWidth = 3;
+  ctx.lineWidth = edgeWidth;
   data.edges.forEach(([start, end]) => {
     const startPoint = points[start];
     const endPoint = points[end];
@@ -76,13 +84,17 @@ function drawViewport(ctx: CanvasRenderingContext2D, width: number, height: numb
     ctx.stroke();
   });
 
-  ctx.fillStyle = JOINT_COLOR;
   points.forEach((point) => {
     if (point.conf < CONFIDENCE_THRESHOLD) {
       return;
     }
     ctx.beginPath();
-    ctx.arc(point.x, point.y, JOINT_RADIUS, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.9)';
+    ctx.arc(point.x, point.y, jointRadius + 0.85, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.fillStyle = JOINT_COLOR;
+    ctx.arc(point.x, point.y, jointRadius, 0, Math.PI * 2);
     ctx.fill();
   });
 

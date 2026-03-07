@@ -1,6 +1,6 @@
 import { Canvas } from '@react-three/fiber';
 import { Line, OrbitControls } from '@react-three/drei';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 type Pose3DBounds = {
   min: [number, number, number];
@@ -26,13 +26,6 @@ type Pose3DViewportProps = {
   emptyText?: string;
 };
 
-type OrbitControlsHandle = {
-  target: {
-    set: (x: number, y: number, z: number) => void;
-  };
-  update: () => void;
-};
-
 const BG_TOP = '#f7f3eb';
 const JOINT_COLOR = '#c88056';
 const ROOT_COLOR = '#b16043';
@@ -40,69 +33,71 @@ const EDGE_COLOR = '#7a5b4a';
 const GRID_COLOR = '#d8cdbc';
 const GRID_CENTER_COLOR = '#bfae96';
 const LIGHT_COLOR = '#fff8ef';
+const JOINT_RADIUS = 0.031;
+const ROOT_RADIUS = 0.039;
+const EDGE_WIDTH = 1.8;
+const AXIS_SIZE = 0.74;
+const GRID_SIZE = 3.4;
+const CAMERA_POSITION: [number, number, number] = [1.56, 1.08, 2.08];
+const CAMERA_FAR = 36;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
+function normalizeJoint(joint: number[], scale: number): [number, number, number] {
+  return [joint[0] / scale, joint[1] / scale, joint[2] / scale];
+}
+
 function SkeletonFrame({ data, frameIndex }: { data: Pose3DData; frameIndex: number }) {
   const frame = data.joints3d[frameIndex] ?? data.joints3d[0] ?? [];
-  const radius = Math.max(data.bounds.max_radius, 0.8);
-  const jointRadius = Math.max(radius * 0.03, 0.025);
-  const axisSize = Math.max(radius * 0.75, 0.55);
-  const gridSize = Math.max(radius * 3.2, 2.4);
+  const sceneScale = Math.max(data.bounds.max_radius, 1);
+  const floorY = data.bounds.floor_y / sceneScale;
+  const points = frame.map((joint) => normalizeJoint(joint, sceneScale));
 
   return (
     <group>
       <ambientLight intensity={0.92} color={LIGHT_COLOR} />
-      <directionalLight position={[radius * 1.6, radius * 2.2, radius * 1.4]} intensity={1.28} color="#fff5e9" />
-      <directionalLight position={[-radius * 1.6, radius * 1.2, -radius * 1.4]} intensity={0.46} color="#f4efe8" />
-      <gridHelper args={[gridSize, 16, GRID_CENTER_COLOR, GRID_COLOR]} position={[0, data.bounds.floor_y, 0]} />
-      <axesHelper args={[axisSize]} />
+      <directionalLight position={[1.92, 2.4, 1.76]} intensity={1.12} color="#fff5e9" />
+      <directionalLight position={[-1.58, 1.32, -1.48]} intensity={0.4} color="#f4efe8" />
+      <gridHelper args={[GRID_SIZE, 18, GRID_CENTER_COLOR, GRID_COLOR]} position={[0, floorY, 0]} />
+      <axesHelper args={[AXIS_SIZE]} />
       {data.edges.map(([start, end], index) => {
-        const startPoint = frame[start];
-        const endPoint = frame[end];
+        const startPoint = points[start];
+        const endPoint = points[end];
         if (!startPoint || !endPoint) {
           return null;
         }
         return (
           <Line
             key={`${start}-${end}-${index}`}
-            points={[
-              [startPoint[0], startPoint[1], startPoint[2]],
-              [endPoint[0], endPoint[1], endPoint[2]],
-            ]}
+            points={[startPoint, endPoint]}
             color={EDGE_COLOR}
-            lineWidth={2.4}
+            lineWidth={EDGE_WIDTH}
           />
         );
       })}
-      {frame.map((joint, index) => (
-        <mesh key={`joint-${index}`} position={[joint[0], joint[1], joint[2]]} castShadow receiveShadow>
-          <sphereGeometry args={[jointRadius, 18, 18]} />
-          <meshStandardMaterial color={index === 0 ? ROOT_COLOR : JOINT_COLOR} roughness={0.42} metalness={0.08} />
+      {points.map((joint, index) => (
+        <mesh key={`joint-${index}`} position={joint} castShadow receiveShadow>
+          <sphereGeometry args={[index === 0 ? ROOT_RADIUS : JOINT_RADIUS, 16, 16]} />
+          <meshStandardMaterial color={index === 0 ? ROOT_COLOR : JOINT_COLOR} roughness={0.46} metalness={0.06} />
         </mesh>
       ))}
     </group>
   );
 }
 
-function SceneRig({ radius, targetY }: { radius: number; targetY: number }) {
-  const controlsRef = useRef<OrbitControlsHandle | null>(null);
-
+function SceneRig({ targetY }: { targetY: number }) {
   return (
     <OrbitControls
-      ref={(controls) => {
-        controlsRef.current = controls as OrbitControlsHandle | null;
-      }}
       target={[0, targetY, 0]}
       enablePan
       enableZoom
       enableRotate
       enableDamping
       dampingFactor={0.08}
-      minDistance={Math.max(radius * 0.9, 0.75)}
-      maxDistance={Math.max(radius * 4.4, 3.2)}
+      minDistance={0.82}
+      maxDistance={4.8}
       maxPolarAngle={Math.PI / 2.02}
     />
   );
@@ -153,14 +148,12 @@ export function Pose3DViewport({ dataUrl, currentTime, playing, className = '', 
     return clamp(Math.round(currentTime * data.fps), 0, data.frame_count - 1);
   }, [currentTime, data]);
 
-  const radius = useMemo(() => Math.max(data?.bounds.max_radius ?? 1.0, 0.8), [data]);
-  const targetY = useMemo(() => Math.max(radius * 0.2, 0.18), [radius]);
-  const sceneKey = `${dataUrl || 'pose-3d-empty'}-${Math.round(radius * 100)}`;
-  const cameraPosition = useMemo<[number, number, number]>(
-    () => [radius * 1.55, Math.max(radius * 1.18, 0.96), radius * 2.2],
-    [radius],
+  const sceneScale = useMemo(() => Math.max(data?.bounds.max_radius ?? 1.0, 1.0), [data]);
+  const targetY = useMemo(
+    () => clamp(-((data?.bounds.floor_y ?? -1) / sceneScale) * 0.12, 0.06, 0.18),
+    [data, sceneScale],
   );
-  const cameraFar = useMemo(() => Math.max(radius * 12, 1200), [radius]);
+  const sceneKey = `${dataUrl || 'pose-3d-empty'}-${Math.round(sceneScale * 100)}`;
   const showPlaceholder = !dataUrl || (!loading && !data);
 
   return (
@@ -168,10 +161,10 @@ export function Pose3DViewport({ dataUrl, currentTime, playing, className = '', 
       className={`relative overflow-hidden rounded-lg border border-zinc-200 bg-[linear-gradient(180deg,#f7f3eb_0%,#ece1d4_100%)] ${className}`.trim()}
     >
       {data ? (
-        <Canvas key={sceneKey} dpr={[1, 2]} camera={{ fov: 34, near: 0.1, far: cameraFar, position: cameraPosition }}>
+        <Canvas key={sceneKey} dpr={[1, 2]} camera={{ fov: 34, near: 0.1, far: CAMERA_FAR, position: CAMERA_POSITION }}>
           <color attach="background" args={[BG_TOP]} />
-          <fog attach="fog" args={[BG_TOP, radius * 4.4, radius * 7.8]} />
-          <SceneRig radius={radius} targetY={targetY} />
+          <fog attach="fog" args={[BG_TOP, 4.2, 7.6]} />
+          <SceneRig targetY={targetY} />
           <SkeletonFrame data={data} frameIndex={frameIndex} />
         </Canvas>
       ) : null}
