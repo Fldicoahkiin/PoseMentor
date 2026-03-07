@@ -62,6 +62,30 @@ AIST_VIDEO_PROFILES: dict[str, dict[str, Any]] = {
 }
 
 
+class CliHelpFormatter(argparse.ArgumentDefaultsHelpFormatter, argparse.RawTextHelpFormatter):
+    pass
+
+
+def _build_examples(*lines: str) -> str:
+    return "用法示例:\n" + "\n".join(f"  {line}" for line in lines)
+
+
+def _add_command_parser(
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+    name: str,
+    help_text: str,
+    description: str,
+    *examples: str,
+) -> argparse.ArgumentParser:
+    return subparsers.add_parser(
+        name,
+        help=help_text,
+        description=description,
+        epilog=_build_examples(*examples),
+        formatter_class=CliHelpFormatter,
+    )
+
+
 def _run_python_script(script: str, extra_args: list[str]) -> int:
     cmd = [sys.executable, script, *extra_args]
     print(f"[CMD] {' '.join(cmd)}")
@@ -975,81 +999,162 @@ def _run_quickstart(local_cfg: dict[str, Any], args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="PoseMentor 一体化 CLI")
-    sub = parser.add_subparsers(dest="command", required=True)
+    parser = argparse.ArgumentParser(
+        prog="./pm",
+        description="PoseMentor 一体化 CLI，用于配置环境、下载数据、启动服务与检查链路。",
+        epilog=_build_examples(
+            "./pm config",
+            "./pm init",
+            "./pm doctor",
+            "./pm quickstart --up",
+            "./pm logs --service backend",
+            "./pm <command> -h  查看某个命令的详细参数",
+        ),
+        formatter_class=CliHelpFormatter,
+    )
+    sub = parser.add_subparsers(dest="command", required=False, title="可用命令", metavar="command")
 
-    p_config = sub.add_parser("config", help="生成或更新本地配置")
-    p_config.add_argument("--force", action="store_true")
-    p_config.add_argument("--profile", default="quick")
-    p_config.add_argument("--backend-host", default="127.0.0.1")
-    p_config.add_argument("--backend-port", type=int, default=8787)
-    p_config.add_argument("--frontend-host", default="127.0.0.1")
-    p_config.add_argument("--frontend-port", type=int, default=7860)
-    p_config.add_argument("--dataset-id", default="aistpp")
-    p_config.add_argument("--standard-id", default="private_action_core")
-    p_config.add_argument("--aist-video-profile", choices=list(AIST_VIDEO_PROFILES.keys()), default="mv3_quick")
+    profile_ids = ", ".join(AIST_VIDEO_PROFILES.keys())
+
+    p_config = _add_command_parser(
+        sub,
+        "config",
+        "生成或更新本地配置",
+        "生成或更新本地配置文件，可设置端口、默认数据集与 AIST 下载策略。",
+        "./pm config",
+        "./pm config --plain --backend-port 8788 --frontend-port 7862",
+        "./pm config --wizard --download-now",
+    )
+    p_config.add_argument("--force", action="store_true", help="覆盖已有本地配置文件并重新写入默认值")
+    p_config.add_argument("--profile", default="quick", help="本地运行档位名称，用于区分 quick、full 等配置方案")
+    p_config.add_argument("--backend-host", default="127.0.0.1", help="后端服务监听地址")
+    p_config.add_argument("--backend-port", type=int, default=8787, help="后端服务端口")
+    p_config.add_argument("--frontend-host", default="127.0.0.1", help="前端服务监听地址")
+    p_config.add_argument("--frontend-port", type=int, default=7860, help="前端服务端口")
+    p_config.add_argument("--dataset-id", default="aistpp", help="默认训练数据集 ID")
+    p_config.add_argument("--standard-id", default="private_action_core", help="默认评分标准库 ID")
+    p_config.add_argument(
+        "--aist-video-profile",
+        choices=list(AIST_VIDEO_PROFILES.keys()),
+        default="mv3_quick",
+        help=f"AIST 多机位下载档位，可选: {profile_ids}",
+    )
     p_config.add_argument("--aist-video-ranges", default="", help="AIST 视频下载区间，如 1-300,600-900")
-    p_config.add_argument("--aist-assume-speed-mbps", type=float, default=10.0, help="下载估算速度（Mbps）")
-    p_config.add_argument("--aist-download-retry", type=int, default=2, help="单文件下载失败后的重试次数")
+    p_config.add_argument("--aist-assume-speed-mbps", type=float, default=10.0, help="估算下载速度，供总耗时预估使用")
+    p_config.add_argument("--aist-download-retry", type=int, default=2, help="单个视频下载失败后的重试次数")
     p_config.add_argument(
         "--aist-download-state-file",
         default="outputs/runtime/aist_download_state.json",
-        help="AIST 下载状态文件路径",
+        help="AIST 下载状态文件路径，用于断点续传和失败恢复",
     )
     p_config.add_argument(
         "--aist-resume-failed",
         action=argparse.BooleanOptionalAction,
         default=False,
-        help="配置默认是否启用失败续传",
+        help="是否默认只续传上次失败的视频",
     )
-    p_config.add_argument("--config-path", default=str(LOCAL_CONFIG_FILE))
-    p_config.add_argument("--wizard", action="store_true", help="使用交互式 Config UI")
-    p_config.add_argument("--plain", action="store_true", help="使用非交互模式写入配置")
-    p_config.add_argument("--download-now", action="store_true", help="配置完成后立即执行 AIST 多机位下载")
+    p_config.add_argument("--config-path", default=str(LOCAL_CONFIG_FILE), help="本地配置文件输出路径")
+    p_config.add_argument("--wizard", action="store_true", help="使用交互式配置界面写入本地配置")
+    p_config.add_argument("--plain", action="store_true", help="使用命令行参数直接写入配置，不进入交互界面")
+    p_config.add_argument("--download-now", action="store_true", help="配置完成后立即按当前档位开始下载 AIST 视频")
 
-    sub.add_parser("doctor", help="检查运行环境和关键依赖")
+    _add_command_parser(
+        sub,
+        "doctor",
+        "检查运行环境和关键依赖",
+        "检查 Python、uv、pnpm、ffmpeg、端口和数据目录状态，并给出修复建议。",
+        "./pm doctor",
+    )
 
-    p_init = sub.add_parser("init", help="安装依赖并初始化本地配置")
-    p_init.add_argument("--config-path", default=str(LOCAL_CONFIG_FILE))
-    p_init.add_argument("--force-config", action="store_true")
+    p_init = _add_command_parser(
+        sub,
+        "init",
+        "安装依赖并初始化本地配置",
+        "初始化目录、检查工具链，并安装 Python 与前端依赖。",
+        "./pm init",
+        "./pm init --force-config",
+    )
+    p_init.add_argument("--config-path", default=str(LOCAL_CONFIG_FILE), help="初始化时使用的本地配置文件路径")
+    p_init.add_argument("--force-config", action="store_true", help="强制重建本地配置文件")
 
-    sub.add_parser("up", help="启动前后端服务")
-    sub.add_parser("down", help="停止前后端服务")
-    sub.add_parser("start", help="启动前后端服务（up 别名）")
-    sub.add_parser("stop", help="停止前后端服务（down 别名）")
-    sub.add_parser("restart", help="重启前后端服务")
-    sub.add_parser("status", help="查看服务状态")
-    sub.add_parser("cleanup", help="清理历史前端进程和僵尸 PID 记录")
+    _add_command_parser(sub, "up", "启动前后端服务", "启动后端 API 和前端工作台服务。", "./pm up")
+    _add_command_parser(sub, "down", "停止前后端服务", "停止后端 API 和前端工作台服务。", "./pm down")
+    _add_command_parser(sub, "start", "启动前后端服务（up 别名）", "等价于 ./pm up。", "./pm start")
+    _add_command_parser(sub, "stop", "停止前后端服务（down 别名）", "等价于 ./pm down。", "./pm stop")
+    _add_command_parser(sub, "restart", "重启前后端服务", "先停止再启动前后端服务。", "./pm restart")
+    _add_command_parser(sub, "status", "查看服务状态", "查看后端、前端、端口和 PID 文件状态。", "./pm status")
+    _add_command_parser(
+        sub,
+        "cleanup",
+        "清理历史前端进程和僵尸 PID 记录",
+        "清理遗留的前端 dev server 和无效 PID 文件，适合端口冲突时使用。",
+        "./pm cleanup",
+    )
 
-    p_logs = sub.add_parser("logs", help="查看服务日志")
-    p_logs.add_argument("--service", choices=[BACKEND_SERVICE, FRONTEND_SERVICE, "all"], default="all")
-    p_logs.add_argument("--lines", type=int, default=120)
+    p_logs = _add_command_parser(
+        sub,
+        "logs",
+        "查看服务日志",
+        "查看后端或前端日志，默认同时输出两者。",
+        "./pm logs",
+        "./pm logs --service backend --lines 200",
+    )
+    p_logs.add_argument(
+        "--service",
+        choices=[BACKEND_SERVICE, FRONTEND_SERVICE, "all"],
+        default="all",
+        help="选择要查看的服务日志",
+    )
+    p_logs.add_argument("--lines", type=int, default=120, help="每个日志文件输出的最后行数")
 
-    p_quickstart = sub.add_parser("quickstart", help="执行最小可用链路")
-    p_quickstart.add_argument("--data-config", default="")
-    p_quickstart.add_argument("--train-config", default="")
-    p_quickstart.add_argument("--epochs", type=int, default=1)
-    p_quickstart.add_argument("--skip-data", action="store_true")
+    p_quickstart = _add_command_parser(
+        sub,
+        "quickstart",
+        "执行最小可用链路",
+        "串起数据准备、2D 提取、3D 训练和可选服务启动，快速跑通最小链路。",
+        "./pm quickstart",
+        "./pm quickstart --download-videos --video-profile mv5_standard",
+        "./pm quickstart --skip-data --skip-extract --up",
+    )
+    p_quickstart.add_argument("--data-config", default="", help="覆盖数据准备阶段使用的数据配置文件")
+    p_quickstart.add_argument("--train-config", default="", help="覆盖训练阶段使用的训练配置文件")
+    p_quickstart.add_argument("--epochs", type=int, default=1, help="训练轮数，适合快速验证时缩短时间")
+    p_quickstart.add_argument("--skip-data", action="store_true", help="跳过数据准备阶段")
     p_quickstart.add_argument("--download-videos", action="store_true", help="按本地配置下载 AIST 多机位视频")
-    p_quickstart.add_argument("--video-profile", default="", help="覆盖本地配置中的 AIST 视频下载 Profile")
+    p_quickstart.add_argument("--video-profile", default="", help="覆盖本地配置中的 AIST 视频下载档位")
     p_quickstart.add_argument(
         "--resume-failed",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="下载视频时是否仅续传上次失败项",
+        help="下载视频时是否只续传上次失败项",
     )
-    p_quickstart.add_argument("--skip-extract", action="store_true")
-    p_quickstart.add_argument("--skip-train", action="store_true")
-    p_quickstart.add_argument("--export-onnx", action="store_true")
-    p_quickstart.add_argument("--up", action="store_true", help="训练结束后自动启动前后端")
+    p_quickstart.add_argument("--skip-extract", action="store_true", help="跳过 2D 关键点提取阶段")
+    p_quickstart.add_argument("--skip-train", action="store_true", help="跳过 3D 训练阶段")
+    p_quickstart.add_argument("--export-onnx", action="store_true", help="训练完成后额外导出 ONNX 模型")
+    p_quickstart.add_argument("--up", action="store_true", help="链路完成后自动启动前后端服务")
 
-    p_resume = sub.add_parser("resume-download", help="按本地状态文件续传 AIST 下载失败项")
+    p_resume = _add_command_parser(
+        sub,
+        "resume-download",
+        "按本地状态文件续传 AIST 下载失败项",
+        "读取下载状态文件，仅重试上次失败或中断的视频。",
+        "./pm resume-download",
+        "./pm resume-download --video-profile mv5_standard",
+    )
     p_resume.add_argument("--data-config", default="", help="覆盖数据配置文件路径")
-    p_resume.add_argument("--video-profile", default="", help="覆盖本地配置中的 AIST 视频下载 Profile")
+    p_resume.add_argument("--video-profile", default="", help="覆盖本地配置中的 AIST 视频下载档位")
 
-    p_quality = sub.add_parser("quality", help="运行全局代码质量与训练链路检查")
-    p_quality.add_argument("--full", action="store_true", help="启用完整质量检查（含 mypy）")
-    p_quality.add_argument("--strict", action="store_true", help="视觉/训练链路指标也作为失败条件")
+    p_quality = _add_command_parser(
+        sub,
+        "quality",
+        "运行全局代码质量与训练链路检查",
+        "运行 ruff、pytest、可选 mypy 与训练链路检查，用于提交前自检。",
+        "./pm quality",
+        "./pm quality --full",
+        "./pm quality --strict --skip-mypy",
+    )
+    p_quality.add_argument("--full", action="store_true", help="启用完整质量检查，包含 mypy")
+    p_quality.add_argument("--strict", action="store_true", help="将视觉和训练链路告警也视为失败")
     p_quality.add_argument("--skip-tests", action="store_true", help="跳过 pytest 回归测试")
     p_quality.add_argument("--skip-mypy", action="store_true", help="跳过 mypy 类型检查")
 
@@ -1058,7 +1163,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     parser = build_parser()
+    if len(sys.argv) <= 1:
+        parser.print_help()
+        print("\n提示：执行 `./pm <command> -h` 查看具体参数说明。")
+        raise SystemExit(0)
+
     args = parser.parse_args()
+    if not getattr(args, "command", ""):
+        parser.print_help()
+        print("\n提示：执行 `./pm <command> -h` 查看具体参数说明。")
+        raise SystemExit(0)
     cmd = args.command
     local_cfg = load_local_config(Path(getattr(args, "config_path", LOCAL_CONFIG_FILE)))
 
