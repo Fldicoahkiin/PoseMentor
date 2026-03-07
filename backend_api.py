@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import threading
@@ -18,7 +19,13 @@ from pydantic import BaseModel
 
 from posementor.infra.command_runner import JobRunner
 from posementor.infra.job_store import JobRecord, JobStore
-from posementor.pipeline.preview_renderer import find_sequence_id, render_pose_preview_videos
+from posementor.pipeline.preview_renderer import (
+    POSE3D_PREVIEW_VERSION,
+    build_pose2d_preview_data,
+    build_pose3d_preview_data,
+    find_sequence_id,
+    render_pose_preview_videos,
+)
 from posementor.utils.io import ensure_dir, load_yaml, save_yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -439,6 +446,19 @@ def _load_keypoints2d(npz_path: Path) -> tuple[np.ndarray, float]:
     return keypoints2d, fps_value
 
 
+def _preview_video_cache_valid(video_path: Path) -> bool:
+    if not video_path.exists():
+        return False
+    cap = cv2.VideoCapture(str(video_path))
+    try:
+        if not cap.isOpened():
+            return False
+        ok, frame = cap.read()
+        return bool(ok and frame is not None and frame.size > 0)
+    finally:
+        cap.release()
+
+
 def _get_preview_pose_model():
     global _preview_pose_model
     if _preview_pose_model is not None:
@@ -591,7 +611,11 @@ def source_preview(dataset_id: str = "aistpp", limit: int = 3) -> dict[str, obje
 
 @app.get("/workspace/pose-preview")
 @app.get("/api/workspace/pose-preview")
-def workspace_pose_preview(dataset_id: str, video_path: str, refresh: bool = False) -> dict[str, object]:
+def workspace_pose_preview(
+    dataset_id: str,
+    video_path: str,
+    refresh: bool = False,
+) -> dict[str, object]:
     _assert_dataset_exists(dataset_id)
     dataset = _find_dataset(dataset_id)
     if not isinstance(dataset, dict):
@@ -657,9 +681,6 @@ def workspace_pose_preview(dataset_id: str, video_path: str, refresh: bool = Fal
     if source_pose2d_file.exists():
         keypoints2d, fps_value = _load_keypoints2d(source_pose2d_file)
         pose2d_dep_file = source_pose2d_file
-    elif fallback_pose2d_file is not None and fallback_pose2d_file.exists():
-        keypoints2d, fps_value = _load_keypoints2d(fallback_pose2d_file)
-        pose2d_dep_file = fallback_pose2d_file
     elif source_pose2d_cache.exists():
         keypoints2d, fps_value = _load_keypoints2d(source_pose2d_cache)
         pose2d_dep_file = source_pose2d_cache
@@ -674,12 +695,12 @@ def workspace_pose_preview(dataset_id: str, video_path: str, refresh: bool = Fal
             )
             pose2d_dep_file = source_pose2d_cache
         except Exception as exc:
-            if not fallback_seq_id:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"未找到视频对应 2D 关键点: {source_name}",
-                ) from exc
             if fallback_pose2d_file is None or not fallback_pose2d_file.exists():
+                if not fallback_seq_id:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"未找到视频对应 2D 关键点: {source_name}",
+                    ) from exc
                 raise HTTPException(
                     status_code=404,
                     detail=f"未找到 2D 文件: seq_id={fallback_seq_id}",
@@ -688,15 +709,33 @@ def workspace_pose_preview(dataset_id: str, video_path: str, refresh: bool = Fal
             pose2d_dep_file = fallback_pose2d_file
 
     cache_dir = ensure_dir(OUTPUT_ROOT / "preview_cache" / dataset_id)
+    output_source = cache_dir / f"{source_stem}_source.mp4"
     output_2d = cache_dir / f"{source_stem}_pose2d.mp4"
+    output_2d_data = cache_dir / f"{source_stem}_pose2d.json"
     output_3d = cache_dir / f"{source_stem}_pose3d.mp4"
+    output_3d_data = cache_dir / f"{source_stem}_pose3d.json"
+    source_cap = cv2.VideoCapture(str(source_video))
+    source_width = int(source_cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 960)
+    source_height = int(source_cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 540)
+    source_cap.release()
     source_mtime = source_video.stat().st_mtime
     dep_mtime = max(pose2d_dep_file.stat().st_mtime, gt_file.stat().st_mtime, source_mtime)
     need_render = bool(refresh)
-    if output_2d.exists() and output_3d.exists():
-        output_mtime = min(output_2d.stat().st_mtime, output_3d.stat().st_mtime)
+    if not (output_source.exists() and output_2d.exists() and output_3d.exists()):
+        need_render = True
+    else:
+        output_mtime = min(
+            output_source.stat().st_mtime,
+            output_2d.stat().st_mtime,
+            output_3d.stat().st_mtime,
+        )
         if not need_render:
             need_render = output_mtime < dep_mtime
+        if not need_render:
+            need_render = not all(
+                _preview_video_cache_valid(path)
+                for path in (output_source, output_2d, output_3d)
+            )
 
     stats: dict[str, float] = {
         "fps": max(0.0, fps_value),
@@ -707,16 +746,96 @@ def workspace_pose_preview(dataset_id: str, video_path: str, refresh: bool = Fal
             source_video=source_video,
             keypoints2d=keypoints2d,
             joints3d=joints3d,
+            output_source=output_source,
             output_2d=output_2d,
             output_3d=output_3d,
         )
 
+    expected_frame_total = int(stats["frames"])
+    need_export_pose2d_data = bool(refresh) or not output_2d_data.exists()
+    if output_2d_data.exists() and not need_export_pose2d_data:
+        need_export_pose2d_data = output_2d_data.stat().st_mtime < dep_mtime
+    if output_2d_data.exists() and not need_export_pose2d_data:
+        try:
+            pose2d_meta = json.loads(output_2d_data.read_text(encoding="utf-8"))
+            need_export_pose2d_data = any(
+                [
+                    int(pose2d_meta.get("frame_count", -1)) != expected_frame_total,
+                    int(pose2d_meta.get("joint_count", -1)) != int(keypoints2d.shape[1]),
+                    int(pose2d_meta.get("frame_width", -1)) != source_width,
+                    int(pose2d_meta.get("frame_height", -1)) != source_height,
+                ]
+            )
+        except Exception:
+            need_export_pose2d_data = True
+    if need_export_pose2d_data or need_render:
+        pose2d_data = build_pose2d_preview_data(
+            keypoints2d=keypoints2d,
+            fps=float(stats["fps"]),
+            frame_width=source_width,
+            frame_height=source_height,
+            frame_total=expected_frame_total,
+        )
+        output_2d_data.write_text(
+            json.dumps(pose2d_data, ensure_ascii=False, separators=(",", ":")),
+            encoding="utf-8",
+        )
+
+    need_export_pose3d_data = bool(refresh) or not output_3d_data.exists()
+    if output_3d_data.exists() and not need_export_pose3d_data:
+        need_export_pose3d_data = output_3d_data.stat().st_mtime < dep_mtime
+    if output_3d_data.exists() and not need_export_pose3d_data:
+        try:
+            pose3d_meta = json.loads(output_3d_data.read_text(encoding="utf-8"))
+            need_export_pose3d_data = any(
+                [
+                    int(pose3d_meta.get("preview_version", 0)) != POSE3D_PREVIEW_VERSION,
+                    int(pose3d_meta.get("frame_count", -1)) != expected_frame_total,
+                    int(pose3d_meta.get("joint_count", -1)) != int(joints3d.shape[1]),
+                ]
+            )
+        except Exception:
+            need_export_pose3d_data = True
+    if need_export_pose3d_data or need_render:
+        pose3d_data = build_pose3d_preview_data(
+            joints3d=joints3d,
+            fps=float(stats["fps"]),
+            frame_total=expected_frame_total,
+        )
+        output_3d_data.write_text(
+            json.dumps(pose3d_data, ensure_ascii=False, separators=(",", ":")),
+            encoding="utf-8",
+        )
+
+    source_video_url = f"/data-files/{rel_data_video.as_posix()}"
+    if output_source.exists():
+        source_video_url = f"/outputs-files/preview_cache/{dataset_id}/{output_source.name}"
+
+    cache_key = str(
+        int(
+            max(
+                (
+                    output_source.stat().st_mtime_ns
+                    if output_source.exists()
+                    else source_video.stat().st_mtime_ns
+                ),
+                output_2d.stat().st_mtime_ns,
+                output_2d_data.stat().st_mtime_ns,
+                output_3d.stat().st_mtime_ns,
+                output_3d_data.stat().st_mtime_ns,
+            )
+        )
+    )
+
     return {
         "dataset_id": dataset_id,
         "seq_id": gt_seq_id,
-        "source_video_url": f"/data-files/{rel_data_video.as_posix()}",
+        "source_video_url": source_video_url,
         "pose2d_video_url": f"/outputs-files/preview_cache/{dataset_id}/{output_2d.name}",
+        "pose2d_data_url": f"/outputs-files/preview_cache/{dataset_id}/{output_2d_data.name}",
         "pose3d_video_url": f"/outputs-files/preview_cache/{dataset_id}/{output_3d.name}",
+        "pose3d_data_url": f"/outputs-files/preview_cache/{dataset_id}/{output_3d_data.name}",
+        "cache_key": cache_key,
         "fps": stats["fps"],
         "frames": stats["frames"],
     }

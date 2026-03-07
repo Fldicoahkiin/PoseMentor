@@ -9,6 +9,8 @@ import {
   Server,
   TriangleAlert,
 } from 'lucide-react';
+import { Pose2DViewport } from '../components/Pose2DViewport';
+import { Pose3DViewport } from '../components/Pose3DViewport';
 import { Button } from '../components/ui/Button';
 import {
   createTrainJob,
@@ -63,16 +65,15 @@ const POSE2D_COLUMN_CLASSES_BY_LIMIT: Record<number, string[]> = {
   ],
 };
 const GRID_CLASSES_BY_LIMIT: Record<number, string> = {
-  3: 'grid grid-cols-1 items-start gap-4 xl:grid-cols-4 xl:auto-rows-[minmax(236px,auto)]',
-  4: 'grid grid-cols-1 items-start gap-4 xl:grid-cols-5 xl:auto-rows-[minmax(236px,auto)]',
+  3: 'grid grid-cols-1 items-stretch gap-4 xl:grid-cols-4 xl:auto-rows-[minmax(264px,1fr)]',
+  4: 'grid grid-cols-1 items-stretch gap-4 xl:grid-cols-5 xl:auto-rows-[minmax(264px,1fr)]',
 };
 const POSE3D_CARD_CLASSES_BY_LIMIT: Record<number, string> = {
-  3: 'self-stretch rounded-xl border border-zinc-200 bg-stone-50 p-3 xl:col-start-4 xl:row-start-1 xl:row-span-2',
-  4: 'self-stretch rounded-xl border border-zinc-200 bg-stone-50 p-3 xl:col-start-5 xl:row-start-1 xl:row-span-2',
+  3: 'flex min-h-[560px] flex-col rounded-xl border border-zinc-200 bg-stone-50 p-3 xl:col-start-4 xl:row-start-1 xl:row-span-2 xl:min-h-0',
+  4: 'flex min-h-[560px] flex-col rounded-xl border border-zinc-200 bg-stone-50 p-3 xl:col-start-5 xl:row-start-1 xl:row-span-2 xl:min-h-0',
 };
 const TRAIN_PROGRESS_STALL_MS = 20_000;
-const SYNC_DRIFT_TOLERANCE = 0.12;
-const SYNC_TICK_MS = 140;
+const SYNC_DRIFT_TOLERANCE = 0.06;
 const DEFAULT_DISPLAY_VIEW_LIMIT = 3;
 
 function formatBytes(sizeBytes: number): string {
@@ -138,6 +139,42 @@ function parseCameraLabel(sample: SourcePreviewItem): string {
   return `视角 c${matched[1]}`;
 }
 
+function toMediaUrl(pathValue: string, cacheKey?: string): string {
+  if (!pathValue) {
+    return '';
+  }
+  const suffix = cacheKey ? `?v=${encodeURIComponent(cacheKey)}` : '';
+  return `${backendBaseUrl}${pathValue}${suffix}`;
+}
+
+function waitForVideoPlayable(video: HTMLVideoElement, timeoutMs = 4000): Promise<void> {
+  if (video.readyState >= 2) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    let done = false;
+    let timerId = 0;
+    const cleanup = () => {
+      video.removeEventListener('loadeddata', finish);
+      video.removeEventListener('canplay', finish);
+      video.removeEventListener('error', finish);
+      window.clearTimeout(timerId);
+    };
+    const finish = () => {
+      if (done) {
+        return;
+      }
+      done = true;
+      cleanup();
+      resolve();
+    };
+    timerId = window.setTimeout(finish, timeoutMs);
+    video.addEventListener('loadeddata', finish, { once: true });
+    video.addEventListener('canplay', finish, { once: true });
+    video.addEventListener('error', finish, { once: true });
+  });
+}
+
 export default function DemoPage() {
   const [loading, setLoading] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -175,6 +212,7 @@ export default function DemoPage() {
   const [trainHint, setTrainHint] = useState('');
   const [prefetchHint, setPrefetchHint] = useState('');
   const [autoAdvancePending, setAutoAdvancePending] = useState(false);
+  const [pendingAutoPlayJobId, setPendingAutoPlayJobId] = useState('');
   const autoPlayedJobRef = useRef('');
   const posePreviewCacheRef = useRef<Record<string, PosePreviewPayload>>({});
   const posePreviewPendingRef = useRef<Record<string, Promise<PosePreviewPayload | null>>>({});
@@ -183,8 +221,6 @@ export default function DemoPage() {
   const [progressUpdatedAt, setProgressUpdatedAt] = useState(0);
   const [progressWatchTs, setProgressWatchTs] = useState(0);
   const sourceVideoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
-  const pose2dVideoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
-  const pose3dVideoRef = useRef<HTMLVideoElement | null>(null);
   const syncTickerRef = useRef<number | null>(null);
   const syncCurrentTimeRef = useRef(0);
   const syncUiUpdateAtRef = useRef(0);
@@ -293,9 +329,9 @@ export default function DemoPage() {
     void run();
   }, [artifactStatus]);
 
-  const runningJobs = useMemo(() => jobs.filter((job) => job.status === 'running').length, [jobs]);
-  const queuedJobs = useMemo(() => jobs.filter((job) => job.status === 'queued').length, [jobs]);
-  const failedJobs = useMemo(() => jobs.filter((job) => job.status === 'failed').length, [jobs]);
+  const runningJobs = jobs.filter((job) => job.status === 'running').length;
+  const queuedJobs = jobs.filter((job) => job.status === 'queued').length;
+  const failedJobs = jobs.filter((job) => job.status === 'failed').length;
 
   const selectedDataset = useMemo(
     () => datasets.find((dataset) => dataset.id === selectedDatasetId) ?? null,
@@ -696,6 +732,7 @@ export default function DemoPage() {
             sample: null,
             sourceVideoUrl: '',
             pose2dVideoUrl: '',
+            pose2dDataUrl: '',
             seqId: '',
             cameraLabel: `视角 ${index + 1}`,
           };
@@ -704,8 +741,13 @@ export default function DemoPage() {
         return {
           index,
           sample,
-          sourceVideoUrl: sample.url ? `${backendBaseUrl}${sample.url}` : '',
-          pose2dVideoUrl: payload?.pose2d_video_url ? `${backendBaseUrl}${payload.pose2d_video_url}` : '',
+          sourceVideoUrl: payload?.source_video_url
+            ? toMediaUrl(payload.source_video_url, payload.cache_key)
+            : sample.url
+              ? `${backendBaseUrl}${sample.url}`
+              : '',
+          pose2dVideoUrl: payload?.pose2d_video_url ? toMediaUrl(payload.pose2d_video_url, payload.cache_key) : '',
+          pose2dDataUrl: payload?.pose2d_data_url ? toMediaUrl(payload.pose2d_data_url, payload.cache_key) : '',
           seqId: payload?.seq_id ?? '',
           cameraLabel: parseCameraLabel(sample),
         };
@@ -713,28 +755,19 @@ export default function DemoPage() {
     [currentGroupSamples, displayViewLimit, posePreviewMap],
   );
 
-  const syncPose3dVideoUrl = useMemo(() => {
+  const syncPose3dDataUrl = useMemo(() => {
     for (const sample of currentGroupSamples) {
       const payload = posePreviewMap[sample.path];
-      if (payload?.pose3d_video_url) {
-        return `${backendBaseUrl}${payload.pose3d_video_url}`;
+      if (payload?.pose3d_data_url) {
+        return toMediaUrl(payload.pose3d_data_url, payload.cache_key);
       }
     }
-    const cachedAny = Object.values(posePreviewMap).find((payload) => payload?.pose3d_video_url);
-    if (cachedAny?.pose3d_video_url) {
-      return `${backendBaseUrl}${cachedAny.pose3d_video_url}`;
-    }
-    if (artifactStatus?.sample_3d_video_exists && artifactStatus.sample_3d_video_url) {
-      return `${backendBaseUrl}${artifactStatus.sample_3d_video_url}`;
+    const cachedAny = Object.values(posePreviewMap).find((payload) => payload?.pose3d_data_url);
+    if (cachedAny?.pose3d_data_url) {
+      return toMediaUrl(cachedAny.pose3d_data_url, cachedAny.cache_key);
     }
     return '';
-  }, [artifactStatus?.sample_3d_video_exists, artifactStatus?.sample_3d_video_url, currentGroupSamples, posePreviewMap]);
-  const syncPose3dIsFallback = useMemo(() => {
-    if (!syncPose3dVideoUrl) {
-      return false;
-    }
-    return Boolean(artifactStatus?.sample_3d_video_exists && syncPose3dVideoUrl.endsWith("sample_3d_latest.mp4"));
-  }, [artifactStatus?.sample_3d_video_exists, syncPose3dVideoUrl]);
+  }, [currentGroupSamples, posePreviewMap]);
   const activeSeqText = useMemo(() => {
     const seqSet = new Set<string>();
     for (const sample of currentGroupSamples) {
@@ -755,9 +788,9 @@ export default function DemoPage() {
 
   const activeViewSlots = viewSlots.filter((slot) => slot.sample);
   const syncReady = Boolean(
-    syncPose3dVideoUrl &&
+    syncPose3dDataUrl &&
     activeViewSlots.length > 0 &&
-    activeViewSlots.every((slot) => slot.sourceVideoUrl && slot.pose2dVideoUrl),
+    activeViewSlots.every((slot) => slot.sourceVideoUrl && slot.pose2dDataUrl),
   );
   const sourceColumnClasses = SOURCE_COLUMN_CLASSES_BY_LIMIT[displayViewLimit] ?? SOURCE_COLUMN_CLASSES_BY_LIMIT[DEFAULT_DISPLAY_VIEW_LIMIT];
   const pose2dColumnClasses = POSE2D_COLUMN_CLASSES_BY_LIMIT[displayViewLimit] ?? POSE2D_COLUMN_CLASSES_BY_LIMIT[DEFAULT_DISPLAY_VIEW_LIMIT];
@@ -779,13 +812,6 @@ export default function DemoPage() {
       if (sourceNode) {
         nodes.push(sourceNode);
       }
-      const pose2dNode = pose2dVideoRefs.current[sample.path];
-      if (pose2dNode) {
-        nodes.push(pose2dNode);
-      }
-    }
-    if (pose3dVideoRef.current) {
-      nodes.push(pose3dVideoRef.current);
     }
     return nodes;
   }, [currentGroupSamples]);
@@ -827,7 +853,7 @@ export default function DemoPage() {
         if (element === master) {
           return;
         }
-        if (element.readyState < 2) {
+        if (element.readyState < 1) {
           return;
         }
         const drift = Math.abs(element.currentTime - sourceTime);
@@ -884,6 +910,20 @@ export default function DemoPage() {
     [recomputeSyncDuration, syncPlaybackRate, syncPlaying],
   );
 
+  const handleVideoLoadedData = useCallback((video: HTMLVideoElement) => {
+    if (syncCurrentTimeRef.current > 0.01 || video.readyState < 2 || video.duration <= 0.05) {
+      return;
+    }
+    if (video.currentTime > 0.001) {
+      return;
+    }
+    try {
+      video.currentTime = 0.001;
+    } catch {
+      return;
+    }
+  }, []);
+
   const handleSourceTimeUpdate = useCallback(() => {
     const source = getMasterSourceVideo();
     if (!source) {
@@ -893,27 +933,29 @@ export default function DemoPage() {
     syncFromMaster(false);
   }, [getMasterSourceVideo, recomputeSyncDuration, syncFromMaster]);
 
-  const handleSyncPlay = useCallback(async () => {
+  const handleSyncPlay = useCallback(async (): Promise<boolean> => {
     if (followTraining) {
       setTrainHint('训练仍在进行，等待当前任务完成后再播放。');
-      return;
+      return false;
     }
     const master = getMasterSourceVideo();
     if (!master) {
-      return;
+      return false;
     }
     const videos = getSyncVideos();
+    if (videos.length === 0) {
+      return false;
+    }
     const anchorTime = syncCurrentTimeRef.current;
     syncSeekAll(anchorTime);
-    for (const element of videos) {
-      element.playbackRate = syncPlaybackRate;
-    }
+    syncSetRateAll(syncPlaybackRate);
+    await Promise.all(videos.map((element) => waitForVideoPlayable(element)));
     try {
       await master.play();
     } catch (err) {
       console.warn(err);
       setSyncPlaying(false);
-      return;
+      return false;
     }
     await Promise.all(
       videos
@@ -922,20 +964,21 @@ export default function DemoPage() {
           try {
             await element.play();
           } catch {
-            // keep master playback when some tracks cannot autoplay immediately
+            return;
           }
         }),
     );
-    syncFromMaster(true);
     setSyncPlaying(true);
-  }, [followTraining, getMasterSourceVideo, getSyncVideos, syncFromMaster, syncPlaybackRate, syncSeekAll]);
+    syncFromMaster(true);
+    return true;
+  }, [followTraining, getMasterSourceVideo, getSyncVideos, syncFromMaster, syncPlaybackRate, syncSeekAll, syncSetRateAll]);
 
   const handleSyncPause = useCallback(() => {
     getSyncVideos().forEach((element) => {
       element.pause();
     });
     if (syncTickerRef.current !== null) {
-      window.clearInterval(syncTickerRef.current);
+      window.cancelAnimationFrame(syncTickerRef.current);
       syncTickerRef.current = null;
     }
     setSyncPlaying(false);
@@ -951,39 +994,63 @@ export default function DemoPage() {
   );
 
   const handleMasterEnded = useCallback(() => {
+    const master = getMasterSourceVideo();
+    const endTime = master?.currentTime ?? syncDuration;
+    if (endTime > 0) {
+      syncSeekAll(endTime);
+    }
     handleSyncPause();
-  }, [handleSyncPause]);
+    if (followTraining || !nextGroup || nextGroup.key === selectedGroupKey) {
+      return;
+    }
+    setSelectedGroupKey(nextGroup.key);
+    setAutoAdvancePending(true);
+    setTrainHint(`当前素材组播放结束，切换到 ${nextGroup.label}`);
+  }, [followTraining, getMasterSourceVideo, handleSyncPause, nextGroup, selectedGroupKey, syncDuration, syncSeekAll]);
 
   useEffect(() => {
     if (!syncPlaying) {
       if (syncTickerRef.current !== null) {
-        window.clearInterval(syncTickerRef.current);
+        window.cancelAnimationFrame(syncTickerRef.current);
         syncTickerRef.current = null;
       }
       return undefined;
     }
-    if (syncTickerRef.current !== null) {
-      window.clearInterval(syncTickerRef.current);
-    }
-    syncTickerRef.current = window.setInterval(() => {
+
+    let cancelled = false;
+    const tick = () => {
+      if (cancelled) {
+        return;
+      }
       syncFromMaster(false);
-    }, SYNC_TICK_MS);
+      syncTickerRef.current = window.requestAnimationFrame(tick);
+    };
+    syncTickerRef.current = window.requestAnimationFrame(tick);
     return () => {
+      cancelled = true;
       if (syncTickerRef.current !== null) {
-        window.clearInterval(syncTickerRef.current);
+        window.cancelAnimationFrame(syncTickerRef.current);
         syncTickerRef.current = null;
       }
     };
   }, [syncFromMaster, syncPlaying]);
 
   useEffect(() => {
-    if (!autoAdvancePending || !syncReady) {
+    if (!autoAdvancePending || !syncReady || followTraining) {
       return;
     }
-    setAutoAdvancePending(false);
-    syncSeekAll(0);
-    void handleSyncPlay();
-  }, [autoAdvancePending, handleSyncPlay, syncReady, syncSeekAll]);
+    let cancelled = false;
+    const run = async () => {
+      const started = await handleSyncPlay();
+      if (!cancelled && started) {
+        setAutoAdvancePending(false);
+      }
+    };
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [autoAdvancePending, followTraining, handleSyncPlay, syncDuration, syncReady]);
 
   useEffect(() => {
     setSyncCurrentTime(0);
@@ -993,16 +1060,15 @@ export default function DemoPage() {
     syncCurrentTimeRef.current = 0;
     syncUiUpdateAtRef.current = 0;
     sourceVideoRefs.current = {};
-    pose2dVideoRefs.current = {};
-    pose3dVideoRef.current = null;
     if (syncTickerRef.current !== null) {
-      window.clearInterval(syncTickerRef.current);
+      window.cancelAnimationFrame(syncTickerRef.current);
       syncTickerRef.current = null;
     }
   }, [selectedDatasetId, selectedGroupKey]);
 
   useEffect(() => {
     autoPlayedJobRef.current = '';
+    setPendingAutoPlayJobId('');
   }, [selectedDatasetId]);
 
   useEffect(() => {
@@ -1037,7 +1103,7 @@ export default function DemoPage() {
     return () => {
       cancelled = true;
     };
-  }, [ensureGroupPosePreview, nextGroup, syncPlaying]);
+  }, [displayViewLimit, ensureGroupPosePreview, nextGroup, syncPlaying]);
 
   useEffect(() => {
     if (followTraining) {
@@ -1125,16 +1191,13 @@ export default function DemoPage() {
       setFollowTraining(false);
       setTrainHint(
         syncReady
-          ? `训练完成：${followTrainJobId}，开始同步播放当前素材组。`
+          ? `训练完成：${followTrainJobId}，正在准备同步播放。`
           : `训练完成：${followTrainJobId}，等待骨架加载完成后可播放。`,
       );
       progressValueRef.current = 1;
       setProgressUpdatedAt(Date.now());
       setProgressWatchTs(Date.now());
-      if (syncReady) {
-        syncSeekAll(0);
-        void handleSyncPlay();
-      }
+      setPendingAutoPlayJobId(followTrainJobId);
       return;
     }
 
@@ -1181,27 +1244,54 @@ export default function DemoPage() {
     if (!shouldAutoPlay) {
       return;
     }
-    if (!syncReady) {
-      return;
-    }
     if (autoPlayedJobRef.current === latestTrainJob.job_id) {
       return;
     }
-    autoPlayedJobRef.current = latestTrainJob.job_id;
-    syncSeekAll(0);
-    void handleSyncPlay();
-    setTrainHint(`训练完成：${latestTrainJob.job_id}，开始同步播放当前素材组。`);
-  }, [followProgress, followTrainJobId, handleSyncPlay, latestTrainJob, syncReady, syncSeekAll]);
+    setPendingAutoPlayJobId(latestTrainJob.job_id);
+  }, [followProgress, followTrainJobId, latestTrainJob]);
+
+
+  useEffect(() => {
+    if (!pendingAutoPlayJobId || followTraining || !syncReady) {
+      return;
+    }
+    if (autoPlayedJobRef.current === pendingAutoPlayJobId) {
+      setPendingAutoPlayJobId('');
+      return;
+    }
+    let cancelled = false;
+    const run = async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 120));
+      if (cancelled) {
+        return;
+      }
+      const started = await handleSyncPlay();
+      if (!started || cancelled) {
+        return;
+      }
+      autoPlayedJobRef.current = pendingAutoPlayJobId;
+      setPendingAutoPlayJobId('');
+      setTrainHint(`训练完成：${pendingAutoPlayJobId}，开始同步播放当前素材组。`);
+    };
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [followTraining, handleSyncPlay, pendingAutoPlayJobId, posePreviewLoading, syncDuration, syncReady]);
 
   const handleStartTraining = useCallback(async () => {
     if (!selectedDatasetId) {
       return;
     }
     const trainConfigPath = selectedDataset?.train_config?.trim() || 'configs/train.yaml';
+    handleSyncPause();
+    syncSeekAll(0);
+    setAutoAdvancePending(false);
     setTrainSubmitting(true);
     setTrainHint('');
     setTrainEvents([]);
     setPrefetchHint('');
+    setPendingAutoPlayJobId('');
     autoPlayedJobRef.current = '';
     try {
       const jobId = await createTrainJob({
@@ -1225,7 +1315,7 @@ export default function DemoPage() {
     } finally {
       setTrainSubmitting(false);
     }
-  }, [refreshCore, selectedDataset?.train_config, selectedDatasetId]);
+  }, [handleSyncPause, refreshCore, selectedDataset?.train_config, selectedDatasetId, syncSeekAll]);
 
   const handleRegenerateCurrentGroup = useCallback(async () => {
     if (!selectedDatasetId || currentGroupAllSamples.length === 0) {
@@ -1440,10 +1530,11 @@ export default function DemoPage() {
               </div>
               <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-2">
                 <div>
-                  <label className="mb-1 block text-xs font-bold uppercase tracking-wider text-zinc-500">
+                  <label htmlFor="selected-dataset" className="mb-1 block text-xs font-bold uppercase tracking-wider text-zinc-500">
                     训练数据集
                   </label>
                   <select
+                    id="selected-dataset"
                     value={selectedDatasetId}
                     onChange={(event) => setSelectedDatasetId(event.target.value)}
                     className="w-full rounded-xl border border-zinc-200 bg-stone-50 px-3 py-2 text-sm"
@@ -1456,10 +1547,11 @@ export default function DemoPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="mb-1 block text-xs font-bold uppercase tracking-wider text-zinc-500">
+                  <label htmlFor="selected-standard" className="mb-1 block text-xs font-bold uppercase tracking-wider text-zinc-500">
                     评分标准库
                   </label>
                   <select
+                    id="selected-standard"
                     value={selectedStandardId}
                     onChange={(event) => setSelectedStandardId(event.target.value)}
                     className="w-full rounded-xl border border-zinc-200 bg-stone-50 px-3 py-2 text-sm"
@@ -1712,13 +1804,13 @@ export default function DemoPage() {
 
             <div className={syncGridClasses}>
               {viewSlots.map((slot, index) => (
-                <div key={`source-${index}`} className={`self-start rounded-xl border border-zinc-200 bg-stone-50 p-3 ${sourceColumnClasses[index] ?? ''}`}>
+                <div key={`source-${slot.sample?.path || `empty-${slot.cameraLabel}`}`} className={`self-start rounded-xl border border-zinc-200 bg-stone-50 p-3 ${sourceColumnClasses[index] ?? ''}`}>
                   <h3 className="mb-2 text-sm font-bold text-zinc-800">
                     素材 {index + 1} · {slot.cameraLabel}
                   </h3>
                   {slot.sourceVideoUrl ? (
                     <video
-                      key={`source-video-${slot.sample?.path || index}`}
+                      key={`source-video-${slot.sourceVideoUrl || slot.sample?.path || index}`}
                       ref={(node) => {
                         if (slot.sample) {
                           sourceVideoRefs.current[slot.sample.path] = node;
@@ -1729,6 +1821,7 @@ export default function DemoPage() {
                       playsInline
                       muted
                       onLoadedMetadata={(event) => handleSyncLoadedMetadata(event.currentTarget)}
+                      onLoadedData={(event) => handleVideoLoadedData(event.currentTarget)}
                       onTimeUpdate={() => {
                         if (index === 0) {
                           handleSourceTimeUpdate();
@@ -1750,7 +1843,7 @@ export default function DemoPage() {
                           handleMasterEnded();
                         }
                       }}
-                      className="h-56 w-full rounded-lg border border-zinc-200 bg-zinc-100 object-cover"
+                      className="h-56 w-full rounded-lg border border-zinc-200 bg-stone-100 object-contain shadow-inner"
                     >
                       <source src={slot.sourceVideoUrl} type="video/mp4" />
                       当前浏览器无法播放视频，请检查编解码格式。
@@ -1764,28 +1857,18 @@ export default function DemoPage() {
               ))}
 
               {viewSlots.map((slot, index) => (
-                <div key={`pose2d-${index}`} className={`self-start rounded-xl border border-zinc-200 bg-stone-50 p-3 ${pose2dColumnClasses[index] ?? ''}`}>
+                <div key={`pose2d-${slot.sample?.path || `empty-${slot.cameraLabel}`}`} className={`self-start rounded-xl border border-zinc-200 bg-stone-50 p-3 ${pose2dColumnClasses[index] ?? ''}`}>
                   <h3 className="mb-2 text-sm font-bold text-zinc-800">
                     2D骨架 {index + 1} · {slot.cameraLabel}
                   </h3>
-                  {slot.pose2dVideoUrl ? (
-                    <video
-                      key={`pose2d-video-${slot.sample?.path || index}`}
-                      ref={(node) => {
-                        if (slot.sample) {
-                          pose2dVideoRefs.current[slot.sample.path] = node;
-                        }
-                      }}
-                      controls={false}
-                      preload="auto"
-                      playsInline
-                      muted
-                      onLoadedMetadata={(event) => handleSyncLoadedMetadata(event.currentTarget)}
-                      className="h-56 w-full rounded-lg border border-zinc-200 bg-zinc-100 object-cover"
-                    >
-                      <source src={slot.pose2dVideoUrl} type="video/mp4" />
-                      当前浏览器无法播放视频，请检查编解码格式。
-                    </video>
+                  {slot.pose2dDataUrl ? (
+                    <Pose2DViewport
+                      key={slot.pose2dDataUrl || slot.sample?.path || slot.cameraLabel}
+                      dataUrl={slot.pose2dDataUrl}
+                      currentTime={syncCurrentTime}
+                      className="h-56 w-full"
+                      emptyText="当前视角暂无 2D 骨架"
+                    />
                   ) : (
                     <div className="flex h-56 w-full items-center justify-center rounded-lg border border-dashed border-zinc-300 bg-white text-sm text-zinc-500">
                       {posePreviewLoading ? '正在生成 2D 骨架...' : '当前视角暂无 2D 骨架'}
@@ -1795,42 +1878,31 @@ export default function DemoPage() {
               ))}
 
               <div className={pose3dCardClasses}>
-                <h3 className="mb-2 text-sm font-bold text-zinc-800">
-                  3D骨架（融合）
+                <div className="mb-2 flex flex-wrap items-center gap-2">
+                  <h3 className="text-sm font-bold text-zinc-800">3D骨架（融合）</h3>
                   {followTraining && asyncTrainGroup?.label && (
-                    <span className="ml-2 rounded-md border border-sky-200 bg-sky-50 px-1.5 py-0.5 text-[11px] font-semibold text-sky-700">
+                    <span className="rounded-md border border-sky-200 bg-sky-50 px-1.5 py-0.5 text-[11px] font-semibold text-sky-700">
                       训练中：{asyncTrainGroup.label}
                     </span>
                   )}
-                  {syncPose3dIsFallback && (
-                    <span className="ml-2 rounded-md border border-zinc-300 bg-white px-1.5 py-0.5 text-[11px] font-semibold text-zinc-600">
-                      回退样例
-                    </span>
-                  )}
-                </h3>
-                {syncPose3dVideoUrl ? (
-                  <video
-                    key={`pose3d-${syncPose3dVideoUrl || 'empty'}`}
-                    ref={pose3dVideoRef}
-                    controls={false}
-                    preload="auto"
-                    playsInline
-                    muted
-                    onLoadedMetadata={(event) => handleSyncLoadedMetadata(event.currentTarget)}
-                    className="h-[472px] w-full rounded-lg border border-zinc-200 bg-zinc-100 object-cover"
-                  >
-                    <source src={syncPose3dVideoUrl} type="video/mp4" />
-                    当前浏览器无法播放视频，请检查编解码格式。
-                  </video>
-                ) : (
-                  <div className="flex h-[472px] w-full items-center justify-center rounded-lg border border-dashed border-zinc-300 bg-white text-sm text-zinc-500">
-                    {posePreviewLoading
+                  <span className="rounded-md border border-zinc-200 bg-white px-1.5 py-0.5 text-[11px] font-semibold text-zinc-600">
+                    浏览器交互视图
+                  </span>
+                </div>
+                <Pose3DViewport
+                  key={syncPose3dDataUrl || selectedGroupKey || selectedDatasetId}
+                  dataUrl={syncPose3dDataUrl}
+                  currentTime={syncCurrentTime}
+                  playing={syncPlaying}
+                  className="min-h-[520px] flex-1 xl:min-h-0"
+                  emptyText={
+                    posePreviewLoading
                       ? '正在生成 3D 骨架...'
                       : followTraining && asyncTrainGroup?.label
                         ? `当前分组暂无 3D 骨架，正在训练：${asyncTrainGroup.label}`
-                        : '当前分组暂无 3D 骨架'}
-                  </div>
-                )}
+                        : '当前分组暂无 3D 骨架'
+                  }
+                />
               </div>
             </div>
 

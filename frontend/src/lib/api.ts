@@ -85,7 +85,10 @@ export type PosePreviewPayload = {
   seq_id: string;
   source_video_url: string;
   pose2d_video_url: string;
+  pose2d_data_url: string;
   pose3d_video_url: string;
+  pose3d_data_url: string;
+  cache_key: string;
   fps: number;
   frames: number;
 };
