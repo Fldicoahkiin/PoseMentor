@@ -1,18 +1,17 @@
 datasets:
-  - id: aistpp
-    name: "AIST++"
-    stage: "production"
-    mode: "singleview"
-    data_config: "configs/data.yaml"
-    train_config: "configs/train.yaml"
-    video_root: "data/raw/aistpp/videos"
-    notes: "默认数据源，已接入完整预处理与训练链路。"
-
-  - id: custom_multiview
-    name: "Custom FourView"
-    stage: "planned"
-    mode: "multiview"
-    data_config: "configs/multiview.yaml"
-    train_config: ""
-    video_root: "data/raw/multiview"
-    notes: "自定义四机位数据集位；后续可在该目录接入前后左右机位素材。"
+- id: aistpp
+  name: AIST++
+  stage: production
+  mode: singleview
+  data_config: configs/data.yaml
+  train_config: configs/train_ui_smoke.yaml
+  video_root: data/raw/aistpp/videos
+  notes: 默认数据源，已接入完整预处理与训练链路。
+- id: custom_multiview
+  name: Custom FourView
+  stage: planned
+  mode: multiview
+  data_config: configs/multiview.yaml
+  train_config: ''
+  video_root: data/raw/multiview
+  notes: 自定义四机位数据集位；后续可在该目录接入前后左右机位素材。

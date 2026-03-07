@@ -1,0 +1,23 @@
+data:
+  yolo2d_dir: data/processed/aistpp_subset_ui/yolo2d
+  gt3d_dir: data/processed/aistpp_subset_ui/gt3d
+  seq_len: 81
+  sample_stride: 3
+  val_ratio: 0.1
+
+model:
+  hidden_dim: 256
+  num_layers: 4
+  num_heads: 8
+
+train:
+  artifact_dir: artifacts
+  batch_size: 16
+  num_workers: 0
+  epochs: 1
+  lr: 3.0e-4
+  weight_decay: 1.0e-4
+  velocity_loss_weight: 0.25
+  accelerator: auto
+  devices: auto
+  precision: 16-mixed
