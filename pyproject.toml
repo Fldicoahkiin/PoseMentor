@@ -24,6 +24,7 @@ dependencies = [
   "plotly>=6.0.0",
   "fastdtw>=0.3.4",
   "onnx>=1.17.0",
+  "onnxscript>=0.4.0",
   "edge-tts>=7.0.0",
   "gTTS>=2.5.4",
   "soundfile>=0.13.1",
