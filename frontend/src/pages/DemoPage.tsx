@@ -1866,6 +1866,8 @@ export default function DemoPage() {
                       key={slot.pose2dDataUrl || slot.sample?.path || slot.cameraLabel}
                       dataUrl={slot.pose2dDataUrl}
                       currentTime={syncCurrentTime}
+                      videoSrc={slot.sourceVideoUrl}
+                      playing={syncPlaying}
                       className="h-56 w-full"
                       emptyText="当前视角暂无 2D 骨架"
                     />

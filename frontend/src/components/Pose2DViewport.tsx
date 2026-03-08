@@ -15,6 +15,8 @@ type Pose2DViewportProps = {
   currentTime: number;
   className?: string;
   emptyText?: string;
+  videoSrc?: string;
+  playing?: boolean;
 };
 
 const PAD_X = 18;
@@ -30,24 +32,36 @@ const BG_COLOR = '#f7f4ef';
 const EDGE_COLOR = '#8f5f43';
 const JOINT_COLOR = '#c98256';
 const GUIDE_COLOR = 'rgba(120, 120, 120, 0.12)';
+const FRAME_BORDER_COLOR = 'rgba(255, 255, 255, 0.52)';
+const FRAME_GLOW_COLOR = 'rgba(18, 18, 18, 0.18)';
+const TIME_SYNC_TOLERANCE = 0.08;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-function drawViewport(ctx: CanvasRenderingContext2D, width: number, height: number, data: Pose2DData, frameIndex: number): void {
+function drawViewport(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  data: Pose2DData,
+  frameIndex: number,
+  hasVideo: boolean,
+): void {
   ctx.clearRect(0, 0, width, height);
-  ctx.fillStyle = BG_COLOR;
-  ctx.fillRect(0, 0, width, height);
+  if (!hasVideo) {
+    ctx.fillStyle = BG_COLOR;
+    ctx.fillRect(0, 0, width, height);
 
-  ctx.strokeStyle = GUIDE_COLOR;
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(width * 0.18, height * 0.82);
-  ctx.lineTo(width * 0.82, height * 0.82);
-  ctx.moveTo(width * 0.5, height * 0.12);
-  ctx.lineTo(width * 0.5, height * 0.92);
-  ctx.stroke();
+    ctx.strokeStyle = GUIDE_COLOR;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(width * 0.18, height * 0.82);
+    ctx.lineTo(width * 0.82, height * 0.82);
+    ctx.moveTo(width * 0.5, height * 0.12);
+    ctx.lineTo(width * 0.5, height * 0.92);
+    ctx.stroke();
+  }
 
   const frame = data.keypoints2d[frameIndex] ?? data.keypoints2d[0];
   const scale = Math.min(
@@ -61,6 +75,16 @@ function drawViewport(ctx: CanvasRenderingContext2D, width: number, height: numb
   const minSide = Math.min(width, height);
   const edgeWidth = clamp(minSide * EDGE_WIDTH_RATIO, EDGE_WIDTH_MIN, EDGE_WIDTH_MAX);
   const jointRadius = clamp(minSide * JOINT_RADIUS_RATIO, JOINT_RADIUS_MIN, JOINT_RADIUS_MAX);
+
+  if (hasVideo) {
+    ctx.save();
+    ctx.shadowColor = FRAME_GLOW_COLOR;
+    ctx.shadowBlur = 18;
+    ctx.strokeStyle = FRAME_BORDER_COLOR;
+    ctx.lineWidth = 1.2;
+    ctx.strokeRect(offsetX + 0.5, offsetY + 0.5, renderWidth - 1, renderHeight - 1);
+    ctx.restore();
+  }
 
   const points = frame.map((joint) => ({
     x: offsetX + joint[0] * scale,
@@ -103,13 +127,22 @@ function drawViewport(ctx: CanvasRenderingContext2D, width: number, height: numb
   ctx.fillText(`frame ${frameIndex + 1}/${data.frame_count}`, 16, 22);
 }
 
-export function Pose2DViewport({ dataUrl, currentTime, className = '', emptyText = '暂无 2D 骨架' }: Pose2DViewportProps) {
+export function Pose2DViewport({
+  dataUrl,
+  currentTime,
+  className = '',
+  emptyText = '暂无 2D 骨架',
+  videoSrc = '',
+  playing = false,
+}: Pose2DViewportProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
   const [data, setData] = useState<Pose2DData | null>(null);
   const [loading, setLoading] = useState(Boolean(dataUrl));
   const [error, setError] = useState('');
   const [size, setSize] = useState({ width: 0, height: 0 });
+  const [readyVideoSrc, setReadyVideoSrc] = useState('');
 
   useEffect(() => {
     if (!dataUrl) {
@@ -176,6 +209,31 @@ export function Pose2DViewport({ dataUrl, currentTime, className = '', emptyText
   }, [currentTime, data]);
 
   useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !videoSrc) {
+      return;
+    }
+    const targetTime = Math.max(0.001, currentTime);
+    const drift = Math.abs(video.currentTime - targetTime);
+    if (drift > TIME_SYNC_TOLERANCE) {
+      if (typeof video.fastSeek === 'function') {
+        video.fastSeek(targetTime);
+      } else {
+        video.currentTime = targetTime;
+      }
+    }
+    if (playing) {
+      if (video.paused) {
+        void video.play().catch(() => undefined);
+      }
+      return;
+    }
+    if (!video.paused) {
+      video.pause();
+    }
+  }, [currentTime, playing, videoSrc]);
+
+  useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || !data || size.width <= 0 || size.height <= 0) {
       return;
@@ -191,8 +249,8 @@ export function Pose2DViewport({ dataUrl, currentTime, className = '', emptyText
     canvas.style.width = `${size.width}px`;
     canvas.style.height = `${size.height}px`;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    drawViewport(ctx, size.width, size.height, data, frameIndex);
-  }, [data, frameIndex, size.height, size.width]);
+    drawViewport(ctx, size.width, size.height, data, frameIndex, Boolean(videoSrc && readyVideoSrc === videoSrc));
+  }, [data, frameIndex, readyVideoSrc, size.height, size.width, videoSrc]);
 
   const showPlaceholder = !dataUrl || (!loading && !data);
 
@@ -201,7 +259,21 @@ export function Pose2DViewport({ dataUrl, currentTime, className = '', emptyText
       ref={containerRef}
       className={`relative overflow-hidden rounded-lg border border-zinc-200 bg-[linear-gradient(180deg,#faf7f2_0%,#f1e8dc_100%)] ${className}`.trim()}
     >
-      {data ? <canvas ref={canvasRef} className="h-full w-full" /> : null}
+      {videoSrc ? (
+        <video
+          key={videoSrc}
+          ref={videoRef}
+          className="absolute inset-0 h-full w-full bg-zinc-900 object-contain"
+          src={videoSrc}
+          muted
+          playsInline
+          preload="metadata"
+          controls={false}
+          onLoadedData={() => setReadyVideoSrc(videoSrc)}
+          onCanPlay={() => setReadyVideoSrc(videoSrc)}
+        />
+      ) : null}
+      {data ? <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" /> : null}
       {loading ? (
         <div className="absolute inset-0 flex items-center justify-center bg-white/58 text-sm font-medium text-zinc-700">
           正在载入 2D 骨架...

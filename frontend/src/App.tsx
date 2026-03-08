@@ -86,7 +86,7 @@ function Sidebar({ collapsed, onToggle }: SidebarProps) {
 function Shell() {
   const location = useLocation();
   const isDemoPage = location.pathname === '/';
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
 
   return (
     <div className="flex h-screen bg-white text-zinc-900 font-sans antialiased overflow-hidden">
