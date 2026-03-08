@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import difflib
 import importlib.util
 import json
 import os
@@ -64,6 +65,41 @@ AIST_VIDEO_PROFILES: dict[str, dict[str, Any]] = {
 
 class CliHelpFormatter(argparse.ArgumentDefaultsHelpFormatter, argparse.RawTextHelpFormatter):
     pass
+
+
+class CliArgumentParser(argparse.ArgumentParser):
+    def _command_choices(self) -> list[str]:
+        rows: list[str] = []
+        for action in self._actions:
+            if isinstance(action, argparse._SubParsersAction):
+                rows.extend(action.choices.keys())
+        return rows
+
+    def error(self, message: str) -> None:
+        invalid_command = ""
+        if "invalid choice" in message and len(sys.argv) > 1:
+            invalid_command = sys.argv[1].strip()
+
+        if invalid_command:
+            suggestions = difflib.get_close_matches(
+                invalid_command,
+                self._command_choices(),
+                n=3,
+                cutoff=0.35,
+            )
+            self.print_help(sys.stderr)
+            lines = [
+                "",
+                f"错误：未识别的命令 `{invalid_command}`。",
+            ]
+            if suggestions:
+                lines.append(f"你可能想用：{', '.join(suggestions)}")
+            lines.append("提示：执行 `./pm <command> -h` 查看具体参数说明。")
+            lines.append("")
+            self.exit(2, "\n".join(lines))
+
+        self.print_help(sys.stderr)
+        self.exit(2, f"\n错误：{message}\n提示：执行 `./pm <command> -h` 查看具体参数说明。\n")
 
 
 def _build_examples(*lines: str) -> str:
@@ -999,7 +1035,7 @@ def _run_quickstart(local_cfg: dict[str, Any], args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = CliArgumentParser(
         prog="./pm",
         description="PoseMentor 一体化 CLI，用于配置环境、下载数据、启动服务与检查链路。",
         epilog=_build_examples(
