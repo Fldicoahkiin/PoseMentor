@@ -15,12 +15,14 @@ type Pose2DViewportProps = {
   currentTime: number;
   className?: string;
   emptyText?: string;
-  videoSrc?: string;
+  videoElement?: HTMLVideoElement | null;
   playing?: boolean;
 };
 
-const PAD_X = 18;
-const PAD_Y = 16;
+const EMPTY_PAD_X = 18;
+const EMPTY_PAD_Y = 16;
+const VIDEO_INSET_X = 0;
+const VIDEO_INSET_Y = 0;
 const JOINT_RADIUS_MIN = 1.8;
 const JOINT_RADIUS_MAX = 3.0;
 const JOINT_RADIUS_RATIO = 0.0085;
@@ -34,10 +36,40 @@ const JOINT_COLOR = '#c98256';
 const GUIDE_COLOR = 'rgba(120, 120, 120, 0.12)';
 const FRAME_BORDER_COLOR = 'rgba(255, 255, 255, 0.52)';
 const FRAME_GLOW_COLOR = 'rgba(18, 18, 18, 0.18)';
-const TIME_SYNC_TOLERANCE = 0.08;
+
+type FrameLayout = {
+  offsetX: number;
+  offsetY: number;
+  renderWidth: number;
+  renderHeight: number;
+  scale: number;
+};
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+function buildLayout(
+  width: number,
+  height: number,
+  frameWidth: number,
+  frameHeight: number,
+  padX: number,
+  padY: number,
+): FrameLayout {
+  const scale = Math.min(
+    (width - padX * 2) / Math.max(1, frameWidth),
+    (height - padY * 2) / Math.max(1, frameHeight),
+  );
+  const renderWidth = frameWidth * scale;
+  const renderHeight = frameHeight * scale;
+  return {
+    offsetX: (width - renderWidth) * 0.5,
+    offsetY: (height - renderHeight) * 0.5,
+    renderWidth,
+    renderHeight,
+    scale,
+  };
 }
 
 function drawViewport(
@@ -46,9 +78,14 @@ function drawViewport(
   height: number,
   data: Pose2DData,
   frameIndex: number,
+  layout: FrameLayout,
   hasVideo: boolean,
 ): void {
-  ctx.clearRect(0, 0, width, height);
+  const frame = data.keypoints2d[frameIndex] ?? data.keypoints2d[0];
+  const minSide = Math.min(width, height);
+  const edgeWidth = clamp(minSide * EDGE_WIDTH_RATIO, EDGE_WIDTH_MIN, EDGE_WIDTH_MAX);
+  const jointRadius = clamp(minSide * JOINT_RADIUS_RATIO, JOINT_RADIUS_MIN, JOINT_RADIUS_MAX);
+
   if (!hasVideo) {
     ctx.fillStyle = BG_COLOR;
     ctx.fillRect(0, 0, width, height);
@@ -63,32 +100,19 @@ function drawViewport(
     ctx.stroke();
   }
 
-  const frame = data.keypoints2d[frameIndex] ?? data.keypoints2d[0];
-  const scale = Math.min(
-    (width - PAD_X * 2) / Math.max(1, data.frame_width),
-    (height - PAD_Y * 2) / Math.max(1, data.frame_height),
-  );
-  const renderWidth = data.frame_width * scale;
-  const renderHeight = data.frame_height * scale;
-  const offsetX = (width - renderWidth) * 0.5;
-  const offsetY = (height - renderHeight) * 0.5;
-  const minSide = Math.min(width, height);
-  const edgeWidth = clamp(minSide * EDGE_WIDTH_RATIO, EDGE_WIDTH_MIN, EDGE_WIDTH_MAX);
-  const jointRadius = clamp(minSide * JOINT_RADIUS_RATIO, JOINT_RADIUS_MIN, JOINT_RADIUS_MAX);
-
   if (hasVideo) {
     ctx.save();
     ctx.shadowColor = FRAME_GLOW_COLOR;
     ctx.shadowBlur = 18;
     ctx.strokeStyle = FRAME_BORDER_COLOR;
     ctx.lineWidth = 1.2;
-    ctx.strokeRect(offsetX + 0.5, offsetY + 0.5, renderWidth - 1, renderHeight - 1);
+    ctx.strokeRect(layout.offsetX + 0.5, layout.offsetY + 0.5, layout.renderWidth - 1, layout.renderHeight - 1);
     ctx.restore();
   }
 
   const points = frame.map((joint) => ({
-    x: offsetX + joint[0] * scale,
-    y: offsetY + joint[1] * scale,
+    x: layout.offsetX + joint[0] * layout.scale,
+    y: layout.offsetY + joint[1] * layout.scale,
     conf: joint[2] ?? 1,
   }));
 
@@ -132,17 +156,14 @@ export function Pose2DViewport({
   currentTime,
   className = '',
   emptyText = '暂无 2D 骨架',
-  videoSrc = '',
+  videoElement = null,
   playing = false,
 }: Pose2DViewportProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
   const [data, setData] = useState<Pose2DData | null>(null);
-  const [loading, setLoading] = useState(Boolean(dataUrl));
   const [error, setError] = useState('');
   const [size, setSize] = useState({ width: 0, height: 0 });
-  const [readyVideoSrc, setReadyVideoSrc] = useState('');
 
   useEffect(() => {
     if (!dataUrl) {
@@ -159,6 +180,7 @@ export function Pose2DViewport({
       })
       .then((payload) => {
         setData(payload);
+        setError('');
       })
       .catch((reason: unknown) => {
         if (controller.signal.aborted) {
@@ -167,11 +189,6 @@ export function Pose2DViewport({
         console.error(reason);
         setData(null);
         setError('2D 骨架读取失败');
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) {
-          setLoading(false);
-        }
       });
 
     return () => controller.abort();
@@ -188,8 +205,8 @@ export function Pose2DViewport({
       if (!entry) {
         return;
       }
-      const nextWidth = Math.max(320, Math.floor(entry.contentRect.width));
-      const nextHeight = Math.max(220, Math.floor(entry.contentRect.height));
+      const nextWidth = Math.max(1, Math.floor(entry.contentRect.width));
+      const nextHeight = Math.max(1, Math.floor(entry.contentRect.height));
       setSize((prev) => {
         if (prev.width === nextWidth && prev.height === nextHeight) {
           return prev;
@@ -209,31 +226,6 @@ export function Pose2DViewport({
   }, [currentTime, data]);
 
   useEffect(() => {
-    const video = videoRef.current;
-    if (!video || !videoSrc) {
-      return;
-    }
-    const targetTime = Math.max(0.001, currentTime);
-    const drift = Math.abs(video.currentTime - targetTime);
-    if (drift > TIME_SYNC_TOLERANCE) {
-      if (typeof video.fastSeek === 'function') {
-        video.fastSeek(targetTime);
-      } else {
-        video.currentTime = targetTime;
-      }
-    }
-    if (playing) {
-      if (video.paused) {
-        void video.play().catch(() => undefined);
-      }
-      return;
-    }
-    if (!video.paused) {
-      video.pause();
-    }
-  }, [currentTime, playing, videoSrc]);
-
-  useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || !data || size.width <= 0 || size.height <= 0) {
       return;
@@ -249,9 +241,26 @@ export function Pose2DViewport({
     canvas.style.width = `${size.width}px`;
     canvas.style.height = `${size.height}px`;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    drawViewport(ctx, size.width, size.height, data, frameIndex, Boolean(videoSrc && readyVideoSrc === videoSrc));
-  }, [data, frameIndex, readyVideoSrc, size.height, size.width, videoSrc]);
+    ctx.clearRect(0, 0, size.width, size.height);
 
+    const hasVideo = Boolean(videoElement && videoElement.readyState >= 2);
+    const layout = buildLayout(
+      size.width,
+      size.height,
+      data.frame_width,
+      data.frame_height,
+      hasVideo ? VIDEO_INSET_X : EMPTY_PAD_X,
+      hasVideo ? VIDEO_INSET_Y : EMPTY_PAD_Y,
+    );
+
+    if (hasVideo && videoElement) {
+      ctx.drawImage(videoElement, layout.offsetX, layout.offsetY, layout.renderWidth, layout.renderHeight);
+    }
+
+    drawViewport(ctx, size.width, size.height, data, frameIndex, layout, hasVideo);
+  }, [data, frameIndex, size.height, size.width, videoElement, currentTime, playing]);
+
+  const loading = Boolean(dataUrl) && !data && !error;
   const showPlaceholder = !dataUrl || (!loading && !data);
 
   return (
@@ -259,20 +268,6 @@ export function Pose2DViewport({
       ref={containerRef}
       className={`relative overflow-hidden rounded-lg border border-zinc-200 bg-[linear-gradient(180deg,#faf7f2_0%,#f1e8dc_100%)] ${className}`.trim()}
     >
-      {videoSrc ? (
-        <video
-          key={videoSrc}
-          ref={videoRef}
-          className="absolute inset-0 h-full w-full bg-zinc-900 object-contain"
-          src={videoSrc}
-          muted
-          playsInline
-          preload="metadata"
-          controls={false}
-          onLoadedData={() => setReadyVideoSrc(videoSrc)}
-          onCanPlay={() => setReadyVideoSrc(videoSrc)}
-        />
-      ) : null}
       {data ? <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" /> : null}
       {loading ? (
         <div className="absolute inset-0 flex items-center justify-center bg-white/58 text-sm font-medium text-zinc-700">

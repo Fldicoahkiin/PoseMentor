@@ -15,7 +15,7 @@ CAMERA_TOKEN_PATTERN = re.compile(r"_c(\d+)_", re.IGNORECASE)
 AIST_CAMERA_COUNT = 9
 AIST_DEFAULT_FPS = 60.0
 AIST_TIMESTAMP_UNIT = 1_000_000.0
-ALIGNMENT_SEARCH_RADIUS = 240
+ALIGNMENT_SEARCH_RADIUS = 480
 ALIGNMENT_SAMPLE_STEP = 4
 ALIGNMENT_CONF_THRES = 0.1
 ALIGNMENT_MIN_VISIBLE_JOINTS = 6
@@ -184,6 +184,7 @@ def load_aist_alignment_meta(
         keypoints3d_file.stat().st_mtime_ns,
         mapping_path.stat().st_mtime_ns,
         setting_file.stat().st_mtime_ns,
+        Path(__file__).stat().st_mtime_ns,
     )
     if cache_path.exists() and not refresh and cache_path.stat().st_mtime_ns >= dep_mtime:
         return json.loads(cache_path.read_text(encoding="utf-8"))

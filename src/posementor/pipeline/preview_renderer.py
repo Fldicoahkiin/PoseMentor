@@ -21,8 +21,8 @@ ROOT_LEFT_HIP = 11
 ROOT_RIGHT_HIP = 12
 CAMERA_TOKEN_PATTERN = re.compile(r"_c\d+_")
 TEMPORAL_SMOOTH_ALPHA = 0.72
-PREVIEW_MAX_WIDTH = 960
-PREVIEW_MAX_HEIGHT = 540
+PREVIEW_MAX_WIDTH = 640
+PREVIEW_MAX_HEIGHT = 360
 AXIS_LENGTH_PX = 56.0
 GRID_TOP_RATIO = 0.60
 GRID_BOTTOM_RATIO = 0.94
@@ -113,6 +113,14 @@ def _fit_preview_size(width: int, height: int) -> tuple[int, int]:
     if target_h % 2 == 1:
         target_h -= 1
     return max(2, target_w), max(2, target_h)
+
+
+
+def _advance_to_frame(cap: cv2.VideoCapture, frame_index: int) -> None:
+    skip = max(0, int(frame_index))
+    for _ in range(skip):
+        if not cap.grab():
+            break
 
 
 def _normalize_xy(
@@ -431,55 +439,127 @@ def _draw_3d_frame(
     return canvas
 
 
-def _write_browser_mp4(path: Path, frames: list[np.ndarray], fps: float) -> None:
-    if not frames:
-        return
-    height, width = frames[0].shape[:2]
-    frame_fps = max(1.0, fps)
+def _write_browser_mp4_command(raw_path: Path, output_path: Path) -> list[str]:
+    return [
+        "-y",
+        "-loglevel",
+        "error",
+        "-i",
+        str(raw_path),
+        "-an",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-profile:v",
+        "baseline",
+        "-level",
+        "3.1",
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
+        str(output_path),
+    ]
 
-    with tempfile.TemporaryDirectory(prefix="pose_preview_", dir=str(path.parent)) as tmp_dir:
-        raw_path = Path(tmp_dir) / "raw.mp4"
-        writer = cv2.VideoWriter(
-            str(raw_path),
+
+class BrowserMp4Writer:
+    def __init__(self, path: Path, fps: float, frame_size: tuple[int, int]) -> None:
+        self.path = path
+        self.frame_fps = max(1.0, fps)
+        self.frame_size = frame_size
+        self._tmp_dir = tempfile.TemporaryDirectory(prefix="pose_preview_", dir=str(path.parent))
+        self._raw_path = Path(self._tmp_dir.name) / "raw.mp4"
+        self._writer = cv2.VideoWriter(
+            str(self._raw_path),
             cv2.VideoWriter_fourcc(*"mp4v"),
-            frame_fps,
-            (width, height),
+            self.frame_fps,
+            frame_size,
         )
-        for frame in frames:
-            writer.write(frame)
-        writer.release()
+        self._frames_written = 0
+        self._closed = False
 
-        ffmpeg_bin = shutil.which("ffmpeg")
-        if ffmpeg_bin:
-            command = [
-                ffmpeg_bin,
-                "-y",
-                "-loglevel",
-                "error",
-                "-i",
-                str(raw_path),
-                "-an",
-                "-c:v",
-                "libx264",
-                "-preset",
-                "veryfast",
-                "-profile:v",
-                "baseline",
-                "-level",
-                "3.1",
-                "-pix_fmt",
-                "yuv420p",
-                "-movflags",
-                "+faststart",
-                str(path),
-            ]
-            try:
-                subprocess.run(command, check=True)
+    def write(self, frame: np.ndarray) -> None:
+        if self._closed or self._writer is None:
+            raise RuntimeError("BrowserMp4Writer 已关闭")
+        self._writer.write(frame)
+        self._frames_written += 1
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        writer = self._writer
+        self._writer = None
+        if writer is not None:
+            writer.release()
+        try:
+            if self._frames_written <= 0:
                 return
-            except Exception:
-                pass
+            ffmpeg_bin = shutil.which("ffmpeg")
+            if ffmpeg_bin:
+                command = [ffmpeg_bin, *_write_browser_mp4_command(self._raw_path, self.path)]
+                try:
+                    subprocess.run(command, check=True)
+                    return
+                except Exception:
+                    pass
+            shutil.copy2(self._raw_path, self.path)
+        finally:
+            self._tmp_dir.cleanup()
 
-        shutil.copy2(raw_path, path)
+    def __enter__(self) -> BrowserMp4Writer:
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
+
+
+def render_source_preview_video(
+    source_video: Path,
+    output_source: Path,
+    source_frame_offset: int = 0,
+    frame_total: int | None = None,
+) -> dict[str, float]:
+    cap = cv2.VideoCapture(str(source_video))
+    if not cap.isOpened():
+        raise RuntimeError(f"无法打开视频: {source_video}")
+
+    fps = float(cap.get(cv2.CAP_PROP_FPS) or 30.0)
+    source_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 960)
+    source_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 540)
+    source_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+    target_width, target_height = _fit_preview_size(source_width, source_height)
+
+    source_start = max(0, int(source_frame_offset))
+    available_total = max(0, source_frames - source_start)
+    if frame_total is not None:
+        available_total = min(available_total, max(0, int(frame_total)))
+    if available_total <= 0:
+        cap.release()
+        raise RuntimeError("源视频裁切后无可用帧。")
+
+    if source_start > 0:
+        _advance_to_frame(cap, source_start)
+
+    frames_written = 0
+    try:
+        with BrowserMp4Writer(output_source, fps, (target_width, target_height)) as writer:
+            for frame_idx in range(available_total):
+                ok, frame = cap.read()
+                if not ok:
+                    break
+                frame_resized = cv2.resize(
+                    frame,
+                    (target_width, target_height),
+                    interpolation=cv2.INTER_AREA,
+                )
+                writer.write(_decorate_source_frame(frame_resized, frame_idx))
+                frames_written += 1
+    finally:
+        cap.release()
+
+    return {"fps": fps, "frames": float(frames_written)}
 
 
 def render_pose_preview_videos(
@@ -515,7 +595,7 @@ def render_pose_preview_videos(
         raise RuntimeError("视频与关键点帧数不匹配，无法生成预览。")
 
     if source_start > 0:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, source_start)
+        _advance_to_frame(cap, source_start)
 
     keypoints2d_use = keypoints2d[:available_total].astype(np.float32)
     joints3d_use = _smooth_sequence(joints3d[:available_total].astype(np.float32))
@@ -534,51 +614,59 @@ def render_pose_preview_videos(
     min_xy = center_xy - span_xy * 0.5
     max_xy = center_xy + span_xy * 0.5
 
-    frames_source: list[np.ndarray] = []
-    frames_2d: list[np.ndarray] = []
-    frames_3d: list[np.ndarray] = []
-    for frame_idx in range(available_total):
-        ok, frame = cap.read()
-        if not ok:
-            break
+    source_writer = (
+        BrowserMp4Writer(output_source, fps, (target_width, target_height))
+        if output_source is not None
+        else None
+    )
+    pose2d_writer = BrowserMp4Writer(output_2d, fps, (target_width, target_height))
+    pose3d_writer = BrowserMp4Writer(output_3d, fps, (target_width, target_height))
+    frames_written = 0
+    try:
+        for frame_idx in range(available_total):
+            ok, frame = cap.read()
+            if not ok:
+                break
 
-        frame_resized = cv2.resize(
-            frame,
-            (target_width, target_height),
-            interpolation=cv2.INTER_AREA,
-        )
-        if output_source is not None:
-            frames_source.append(_decorate_source_frame(frame_resized, frame_idx))
+            frame_resized = cv2.resize(
+                frame,
+                (target_width, target_height),
+                interpolation=cv2.INTER_AREA,
+            )
+            if source_writer is not None:
+                source_writer.write(_decorate_source_frame(frame_resized, frame_idx))
 
-        kp = keypoints2d_use[frame_idx].copy()
-        kp[:, 0] *= scale_x
-        kp[:, 1] *= scale_y
-        frame_2d = draw_pose_2d(frame_resized.copy(), kp, conf_thres=0.05)
-        cv2.putText(
-            frame_2d,
-            f"2D Skeleton frame={frame_idx}",
-            (20, 34),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.7,
-            (24, 24, 24),
-            2,
-            lineType=cv2.LINE_AA,
-        )
-        frames_2d.append(frame_2d)
+            kp = keypoints2d_use[frame_idx].copy()
+            kp[:, 0] *= scale_x
+            kp[:, 1] *= scale_y
+            frame_2d = draw_pose_2d(frame_resized.copy(), kp, conf_thres=0.05)
+            cv2.putText(
+                frame_2d,
+                f"2D Skeleton frame={frame_idx}",
+                (20, 34),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                (24, 24, 24),
+                2,
+                lineType=cv2.LINE_AA,
+            )
+            pose2d_writer.write(frame_2d)
 
-        frame_3d = _draw_3d_frame(
-            projected_all[frame_idx],
-            min_xy=min_xy,
-            max_xy=max_xy,
-            width=target_width,
-            height=target_height,
-            frame_idx=frame_idx,
-        )
-        frames_3d.append(frame_3d)
+            frame_3d = _draw_3d_frame(
+                projected_all[frame_idx],
+                min_xy=min_xy,
+                max_xy=max_xy,
+                width=target_width,
+                height=target_height,
+                frame_idx=frame_idx,
+            )
+            pose3d_writer.write(frame_3d)
+            frames_written += 1
+    finally:
+        cap.release()
+        if source_writer is not None:
+            source_writer.close()
+        pose2d_writer.close()
+        pose3d_writer.close()
 
-    cap.release()
-    if output_source is not None:
-        _write_browser_mp4(output_source, frames_source, fps)
-    _write_browser_mp4(output_2d, frames_2d, fps)
-    _write_browser_mp4(output_3d, frames_3d, fps)
-    return {"fps": fps, "frames": float(len(frames_2d))}
+    return {"fps": fps, "frames": float(frames_written)}
