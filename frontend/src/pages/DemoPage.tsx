@@ -115,7 +115,8 @@ const POSE3D_CARD_CLASSES_BY_COUNT: Record<number, string> = {
   6: 'flex min-h-[560px] flex-col rounded-xl border border-zinc-200 bg-stone-50 p-3 xl:col-start-7 xl:row-start-1 xl:row-span-2 xl:min-h-0',
 };
 const TRAIN_PROGRESS_STALL_MS = 20_000;
-const SYNC_DRIFT_TOLERANCE = 0.06;
+const SYNC_DRIFT_TOLERANCE = 0.16;
+const SYNC_TICK_MS = 160;
 
 function formatBytes(sizeBytes: number): string {
   if (sizeBytes < 1024) {
@@ -892,7 +893,7 @@ export default function DemoPage() {
         if (element === master) {
           return;
         }
-        if (element.readyState < 1) {
+        if (element.readyState < 2) {
           return;
         }
         const drift = Math.abs(element.currentTime - sourceTime);
@@ -968,9 +969,8 @@ export default function DemoPage() {
     if (!source) {
       return;
     }
-    recomputeSyncDuration();
     syncFromMaster(false);
-  }, [getMasterSourceVideo, recomputeSyncDuration, syncFromMaster]);
+  }, [getMasterSourceVideo, syncFromMaster]);
 
   const handleSyncPlay = useCallback(async (): Promise<boolean> => {
     if (followTraining) {
@@ -1050,25 +1050,20 @@ export default function DemoPage() {
   useEffect(() => {
     if (!syncPlaying) {
       if (syncTickerRef.current !== null) {
-        window.cancelAnimationFrame(syncTickerRef.current);
+        window.clearInterval(syncTickerRef.current);
         syncTickerRef.current = null;
       }
       return undefined;
     }
-
-    let cancelled = false;
-    const tick = () => {
-      if (cancelled) {
-        return;
-      }
+    if (syncTickerRef.current !== null) {
+      window.clearInterval(syncTickerRef.current);
+    }
+    syncTickerRef.current = window.setInterval(() => {
       syncFromMaster(false);
-      syncTickerRef.current = window.requestAnimationFrame(tick);
-    };
-    syncTickerRef.current = window.requestAnimationFrame(tick);
+    }, SYNC_TICK_MS);
     return () => {
-      cancelled = true;
       if (syncTickerRef.current !== null) {
-        window.cancelAnimationFrame(syncTickerRef.current);
+        window.clearInterval(syncTickerRef.current);
         syncTickerRef.current = null;
       }
     };

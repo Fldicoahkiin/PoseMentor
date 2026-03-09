@@ -94,8 +94,6 @@ function SceneRig({ targetY }: { targetY: number }) {
       enablePan
       enableZoom
       enableRotate
-      enableDamping
-      dampingFactor={0.08}
       minDistance={0.82}
       maxDistance={4.8}
       maxPolarAngle={Math.PI / 2.02}
@@ -161,7 +159,7 @@ export function Pose3DViewport({ dataUrl, currentTime, playing, className = '', 
       className={`relative overflow-hidden rounded-lg border border-zinc-200 bg-[linear-gradient(180deg,#f7f3eb_0%,#ece1d4_100%)] ${className}`.trim()}
     >
       {data ? (
-        <Canvas key={sceneKey} dpr={[1, 2]} camera={{ fov: 34, near: 0.1, far: CAMERA_FAR, position: CAMERA_POSITION }}>
+        <Canvas key={sceneKey} dpr={[1, 1.25]} camera={{ fov: 34, near: 0.1, far: CAMERA_FAR, position: CAMERA_POSITION }} gl={{ powerPreference: "high-performance", antialias: true }}>
           <color attach="background" args={[BG_TOP]} />
           <fog attach="fog" args={[BG_TOP, 4.2, 7.6]} />
           <SceneRig targetY={targetY} />
