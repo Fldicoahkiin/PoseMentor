@@ -63,6 +63,7 @@ posementor/
 完整步骤见：[`docs/QUICKSTART.md`](docs/QUICKSTART.md)
 
 关键技术文档：
+- [`docs/TECHNICAL_ROUTE.md`](docs/TECHNICAL_ROUTE.md)
 - [`docs/TRAINING_PIPELINE.md`](docs/TRAINING_PIPELINE.md)
 - [`docs/CAMERA_ALIGNMENT.md`](docs/CAMERA_ALIGNMENT.md)
 - [`docs/DATASET_CAPTURE_GUIDE.md`](docs/DATASET_CAPTURE_GUIDE.md)
