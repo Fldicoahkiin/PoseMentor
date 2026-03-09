@@ -5,6 +5,8 @@ import {
   FileStack,
   Film,
   LoaderCircle,
+  Pause,
+  Play,
   RefreshCw,
   Server,
   TriangleAlert,
@@ -115,8 +117,10 @@ const POSE3D_CARD_CLASSES_BY_COUNT: Record<number, string> = {
   6: 'flex min-h-[560px] flex-col rounded-xl border border-zinc-200 bg-stone-50 p-3 xl:col-start-7 xl:row-start-1 xl:row-span-2 xl:min-h-0',
 };
 const TRAIN_PROGRESS_STALL_MS = 20_000;
-const SYNC_DRIFT_TOLERANCE = 0.16;
-const SYNC_TICK_MS = 160;
+const SYNC_DRIFT_TOLERANCE = 0.05;
+const SYNC_HARD_SEEK_TOLERANCE = 0.22;
+const SYNC_TICK_MS = 90;
+const SYNC_PAUSE_SETTLE_MS = 72;
 
 function formatBytes(sizeBytes: number): string {
   if (sizeBytes < 1024) {
@@ -217,6 +221,36 @@ function waitForVideoPlayable(video: HTMLVideoElement, timeoutMs = 4000): Promis
   });
 }
 
+function seekVideo(video: HTMLVideoElement, timeSeconds: number): void {
+  try {
+    if (typeof video.fastSeek === 'function') {
+      video.fastSeek(timeSeconds);
+      return;
+    }
+  } catch {
+    // fastSeek 失败时回退为 currentTime 赋值
+  }
+  video.currentTime = timeSeconds;
+}
+
+function pickMedian(values: number[], fallback = 0): number {
+  const ordered = values.filter((value) => Number.isFinite(value)).sort((left, right) => left - right);
+  if (ordered.length === 0) {
+    return fallback;
+  }
+  const middle = Math.floor(ordered.length / 2);
+  if (ordered.length % 2 === 1) {
+    return ordered[middle] ?? fallback;
+  }
+  const left = ordered[middle - 1] ?? fallback;
+  const right = ordered[middle] ?? fallback;
+  return (left + right) / 2;
+}
+
+function clampRate(rate: number): number {
+  return Math.max(0.5, Math.min(2, rate));
+}
+
 export default function DemoPage() {
   const [loading, setLoading] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -264,8 +298,11 @@ export default function DemoPage() {
   const sourceVideoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
   const pose2dVideoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
   const syncTickerRef = useRef<number | null>(null);
+  const syncPauseSettleRef = useRef<number | null>(null);
   const syncCurrentTimeRef = useRef(0);
   const syncUiUpdateAtRef = useRef(0);
+  const syncPlayingRef = useRef(false);
+  const syncPauseGuardRef = useRef(false);
 
   const refreshCore = useCallback(async () => {
     setLoading(true);
@@ -856,6 +893,27 @@ export default function DemoPage() {
     return nodes;
   }, [currentGroupSamples]);
 
+  const getSyncTimes = useCallback(() => {
+    return getSyncVideos()
+      .filter((node) => node.readyState >= 2)
+      .map((node) => node.currentTime)
+      .filter((value) => Number.isFinite(value) && value >= 0);
+  }, [getSyncVideos]);
+
+  const clearSyncTicker = useCallback(() => {
+    if (syncTickerRef.current !== null) {
+      window.clearInterval(syncTickerRef.current);
+      syncTickerRef.current = null;
+    }
+  }, []);
+
+  const clearSyncPauseSettleTimer = useCallback(() => {
+    if (syncPauseSettleRef.current !== null) {
+      window.clearTimeout(syncPauseSettleRef.current);
+      syncPauseSettleRef.current = null;
+    }
+  }, []);
+
   const recomputeSyncDuration = useCallback(() => {
     const durations = getSyncVideos()
       .map((node) => node.duration)
@@ -881,50 +939,17 @@ export default function DemoPage() {
     setSyncCurrentTime(nextTime);
   }, []);
 
-  const syncFromMaster = useCallback(
-    (force: boolean) => {
-      const master = getMasterSourceVideo();
-      if (!master) {
-        return;
-      }
-      const sourceTime = master.currentTime;
-      const tolerance = force ? 0.02 : SYNC_DRIFT_TOLERANCE;
-      getSyncVideos().forEach((element) => {
-        if (element === master) {
-          return;
-        }
-        if (element.readyState < 2) {
-          return;
-        }
-        const drift = Math.abs(element.currentTime - sourceTime);
-        if (drift > tolerance) {
-          if (typeof element.fastSeek === 'function') {
-            element.fastSeek(sourceTime);
-          } else {
-            element.currentTime = sourceTime;
-          }
-        }
-        if (syncPlaying && element.paused) {
-          void element.play().catch(() => undefined);
-        }
-      });
-      updateSyncCurrentTime(sourceTime, force);
-    },
-    [getMasterSourceVideo, getSyncVideos, syncPlaying, updateSyncCurrentTime],
-  );
-
   const syncSeekAll = useCallback((timeSeconds: number) => {
     getSyncVideos().forEach((element) => {
       if (Math.abs(element.currentTime - timeSeconds) > 0.01) {
-        if (typeof element.fastSeek === 'function') {
-          element.fastSeek(timeSeconds);
-        } else {
-          element.currentTime = timeSeconds;
-        }
+        seekVideo(element, timeSeconds);
+      }
+      if (Math.abs(element.playbackRate - syncPlaybackRate) > 0.001) {
+        element.playbackRate = syncPlaybackRate;
       }
     });
     updateSyncCurrentTime(timeSeconds, true);
-  }, [getSyncVideos, updateSyncCurrentTime]);
+  }, [getSyncVideos, syncPlaybackRate, updateSyncCurrentTime]);
 
   const syncSetRateAll = useCallback(
     (rate: number) => {
@@ -935,19 +960,59 @@ export default function DemoPage() {
     [getSyncVideos],
   );
 
+  const syncFromMaster = useCallback(
+    (force: boolean) => {
+      const master = getMasterSourceVideo();
+      if (!master || syncPauseGuardRef.current) {
+        return;
+      }
+      const sourceTime = master.currentTime;
+      const softTolerance = force ? 0.018 : SYNC_DRIFT_TOLERANCE;
+      getSyncVideos().forEach((element) => {
+        if (element === master || element.readyState < 2) {
+          return;
+        }
+        const drift = sourceTime - element.currentTime;
+        const absDrift = Math.abs(drift);
+        if (absDrift > (force ? 0.03 : SYNC_HARD_SEEK_TOLERANCE)) {
+          seekVideo(element, sourceTime);
+          if (Math.abs(element.playbackRate - syncPlaybackRate) > 0.001) {
+            element.playbackRate = syncPlaybackRate;
+          }
+        } else if (absDrift > softTolerance) {
+          const adjust = drift > 0 ? 0.08 : -0.08;
+          const targetRate = clampRate(syncPlaybackRate + adjust);
+          if (Math.abs(element.playbackRate - targetRate) > 0.001) {
+            element.playbackRate = targetRate;
+          }
+        } else if (Math.abs(element.playbackRate - syncPlaybackRate) > 0.001) {
+          element.playbackRate = syncPlaybackRate;
+        }
+        if (syncPlayingRef.current && element.paused) {
+          void element.play().catch(() => undefined);
+        }
+      });
+      if (Math.abs(master.playbackRate - syncPlaybackRate) > 0.001) {
+        master.playbackRate = syncPlaybackRate;
+      }
+      updateSyncCurrentTime(sourceTime, force);
+    },
+    [getMasterSourceVideo, getSyncVideos, syncPlaybackRate, updateSyncCurrentTime],
+  );
+
   const handleSyncLoadedMetadata = useCallback(
     (video: HTMLVideoElement) => {
       video.playbackRate = syncPlaybackRate;
       const anchorTime = syncCurrentTimeRef.current;
       if (anchorTime > 0.01 && Math.abs(video.currentTime - anchorTime) > 0.02) {
-        video.currentTime = anchorTime;
+        seekVideo(video, anchorTime);
       }
-      if (syncPlaying && video.paused) {
+      if (syncPlayingRef.current && video.paused && !syncPauseGuardRef.current) {
         void video.play().catch(() => undefined);
       }
       recomputeSyncDuration();
     },
-    [recomputeSyncDuration, syncPlaybackRate, syncPlaying],
+    [recomputeSyncDuration, syncPlaybackRate],
   );
 
   const handleVideoLoadedData = useCallback((video: HTMLVideoElement) => {
@@ -966,7 +1031,7 @@ export default function DemoPage() {
 
   const handleSourceTimeUpdate = useCallback(() => {
     const source = getMasterSourceVideo();
-    if (!source) {
+    if (!source || syncPauseGuardRef.current) {
       return;
     }
     syncFromMaster(false);
@@ -985,43 +1050,77 @@ export default function DemoPage() {
     if (videos.length === 0) {
       return false;
     }
-    const anchorTime = syncCurrentTimeRef.current;
+
+    clearSyncTicker();
+    clearSyncPauseSettleTimer();
+    syncPauseGuardRef.current = false;
+
+    const anchorTime = pickMedian(getSyncTimes(), syncCurrentTimeRef.current);
     syncSeekAll(anchorTime);
     syncSetRateAll(syncPlaybackRate);
     await Promise.all(videos.map((element) => waitForVideoPlayable(element)));
+
     try {
-      await master.play();
+      await Promise.all(
+        videos.map(async (element) => {
+          try {
+            await element.play();
+          } catch (error) {
+            if (element === master) {
+              throw error;
+            }
+          }
+        }),
+      );
     } catch (err) {
       console.warn(err);
+      syncPlayingRef.current = false;
       setSyncPlaying(false);
       return false;
     }
-    await Promise.all(
-      videos
-        .filter((element) => element !== master)
-        .map(async (element) => {
-          try {
-            await element.play();
-          } catch {
-            return;
-          }
-        }),
-    );
+
+    syncPlayingRef.current = true;
     setSyncPlaying(true);
     syncFromMaster(true);
     return true;
-  }, [followTraining, getMasterSourceVideo, getSyncVideos, syncFromMaster, syncPlaybackRate, syncSeekAll, syncSetRateAll]);
+  }, [
+    clearSyncPauseSettleTimer,
+    clearSyncTicker,
+    followTraining,
+    getMasterSourceVideo,
+    getSyncTimes,
+    getSyncVideos,
+    syncFromMaster,
+    syncPlaybackRate,
+    syncSeekAll,
+    syncSetRateAll,
+  ]);
 
   const handleSyncPause = useCallback(() => {
-    getSyncVideos().forEach((element) => {
-      element.pause();
-    });
-    if (syncTickerRef.current !== null) {
-      window.cancelAnimationFrame(syncTickerRef.current);
-      syncTickerRef.current = null;
+    if (syncPauseGuardRef.current) {
+      return;
     }
+    syncPauseGuardRef.current = true;
+    syncPlayingRef.current = false;
+    clearSyncTicker();
+    clearSyncPauseSettleTimer();
+
+    const pauseTime = pickMedian(getSyncTimes(), syncCurrentTimeRef.current);
+    const videos = getSyncVideos();
+    videos.forEach((element) => {
+      element.pause();
+      if (Math.abs(element.playbackRate - syncPlaybackRate) > 0.001) {
+        element.playbackRate = syncPlaybackRate;
+      }
+    });
+    syncSeekAll(pauseTime);
+    syncPauseSettleRef.current = window.setTimeout(() => {
+      syncSeekAll(pauseTime);
+      syncPauseGuardRef.current = false;
+      syncPauseSettleRef.current = null;
+    }, SYNC_PAUSE_SETTLE_MS);
     setSyncPlaying(false);
-  }, [getSyncVideos]);
+  }, [clearSyncPauseSettleTimer, clearSyncTicker, getSyncTimes, getSyncVideos, syncPlaybackRate, syncSeekAll]);
 
   const handleSyncRateChange = useCallback(
     (event: ChangeEvent<HTMLSelectElement>) => {
@@ -1048,26 +1147,19 @@ export default function DemoPage() {
   }, [followTraining, getMasterSourceVideo, handleSyncPause, nextGroup, selectedGroupKey, syncDuration, syncSeekAll]);
 
   useEffect(() => {
+    syncPlayingRef.current = syncPlaying;
     if (!syncPlaying) {
-      if (syncTickerRef.current !== null) {
-        window.clearInterval(syncTickerRef.current);
-        syncTickerRef.current = null;
-      }
+      clearSyncTicker();
       return undefined;
     }
-    if (syncTickerRef.current !== null) {
-      window.clearInterval(syncTickerRef.current);
-    }
+    clearSyncTicker();
     syncTickerRef.current = window.setInterval(() => {
       syncFromMaster(false);
     }, SYNC_TICK_MS);
     return () => {
-      if (syncTickerRef.current !== null) {
-        window.clearInterval(syncTickerRef.current);
-        syncTickerRef.current = null;
-      }
+      clearSyncTicker();
     };
-  }, [syncFromMaster, syncPlaying]);
+  }, [clearSyncTicker, syncFromMaster, syncPlaying]);
 
   useEffect(() => {
     if (!autoAdvancePending || !syncReady || followTraining) {
@@ -1093,13 +1185,13 @@ export default function DemoPage() {
     setPrefetchHint('');
     syncCurrentTimeRef.current = 0;
     syncUiUpdateAtRef.current = 0;
+    syncPlayingRef.current = false;
+    syncPauseGuardRef.current = false;
     sourceVideoRefs.current = {};
     pose2dVideoRefs.current = {};
-    if (syncTickerRef.current !== null) {
-      window.cancelAnimationFrame(syncTickerRef.current);
-      syncTickerRef.current = null;
-    }
-  }, [selectedDatasetId, selectedGroupKey]);
+    clearSyncTicker();
+    clearSyncPauseSettleTimer();
+  }, [clearSyncPauseSettleTimer, clearSyncTicker, selectedDatasetId, selectedGroupKey]);
 
   useEffect(() => {
     autoPlayedJobRef.current = '';
@@ -1755,18 +1847,20 @@ export default function DemoPage() {
                   size="sm"
                   onClick={() => void handleSyncPlay()}
                   disabled={!syncReady || followTraining}
-                  className="h-9"
+                  className="h-9 gap-2 px-3"
                 >
-                  播放
+                  <Play className="h-4 w-4" aria-hidden="true" />
+                  <span>播放</span>
                 </Button>
                 <Button
                   size="sm"
                   variant="outline"
                   onClick={handleSyncPause}
                   disabled={!syncReady || followTraining}
-                  className="h-9"
+                  className="h-9 gap-2 px-3"
                 >
-                  暂停
+                  <Pause className="h-4 w-4" aria-hidden="true" />
+                  <span>暂停</span>
                 </Button>
                 <select
                   value={syncPlaybackRate}
@@ -1844,7 +1938,7 @@ export default function DemoPage() {
                         }
                       }}
                       controls={false}
-                      preload="auto"
+                      preload="metadata"
                       playsInline
                       muted
                       onLoadedMetadata={(event) => handleSyncLoadedMetadata(event.currentTarget)}
@@ -1855,13 +1949,14 @@ export default function DemoPage() {
                         }
                       }}
                       onPlay={() => {
-                        if (index === 0) {
+                        if (index === 0 && !syncPauseGuardRef.current) {
+                          syncPlayingRef.current = true;
                           setSyncPlaying(true);
                           syncFromMaster(true);
                         }
                       }}
                       onPause={() => {
-                        if (index === 0) {
+                        if (index === 0 && !syncPauseGuardRef.current) {
                           handleSyncPause();
                         }
                       }}
@@ -1897,7 +1992,7 @@ export default function DemoPage() {
                         }
                       }}
                       controls={false}
-                      preload="auto"
+                      preload="metadata"
                       playsInline
                       muted
                       onLoadedMetadata={(event) => handleSyncLoadedMetadata(event.currentTarget)}
