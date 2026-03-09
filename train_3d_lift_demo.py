@@ -344,7 +344,12 @@ def main() -> None:
             state = torch.load(ckpt_cb.best_model_path, map_location="cpu")
             sd = {k.replace("model.", "", 1): v for k, v in state["state_dict"].items()}
             export_model.load_state_dict(sd, strict=False)
-        export_onnx(export_model, seq_len, artifact_dir / "lift_demo.onnx")
+        try:
+            export_onnx(export_model, seq_len, artifact_dir / "lift_demo.onnx")
+        except ModuleNotFoundError as exc:
+            print(f"[WARN] 跳过 ONNX 导出，缺少依赖: {exc.name or exc}")
+        except ImportError as exc:
+            print(f"[WARN] 跳过 ONNX 导出，依赖加载失败: {exc}")
 
 
 if __name__ == "__main__":

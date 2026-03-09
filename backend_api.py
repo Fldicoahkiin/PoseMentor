@@ -86,7 +86,7 @@ class TrainRequest(BaseModel):
     yolo2d_dir: str | None = None
     gt3d_dir: str | None = None
     artifact_dir: str | None = None
-    export_onnx: bool = True
+    export_onnx: bool = False
 
 
 class MultiViewRequest(BaseModel):

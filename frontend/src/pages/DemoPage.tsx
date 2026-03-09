@@ -9,7 +9,6 @@ import {
   Server,
   TriangleAlert,
 } from 'lucide-react';
-import { Pose2DViewport } from '../components/Pose2DViewport';
 import { Pose3DViewport } from '../components/Pose3DViewport';
 import { Button } from '../components/ui/Button';
 import {
@@ -46,7 +45,10 @@ type SourceGroup = {
 };
 
 const CAMERA_TOKEN_PATTERN = /_c(\d+)_/i;
-const SOURCE_COLUMN_CLASSES_BY_LIMIT: Record<number, string[]> = {
+const MAX_LAYOUT_VIEW_COUNT = 6;
+const SOURCE_COLUMN_CLASSES_BY_COUNT: Record<number, string[]> = {
+  1: ['xl:col-start-1 xl:row-start-1'],
+  2: ['xl:col-start-1 xl:row-start-1', 'xl:col-start-2 xl:row-start-1'],
   3: ['xl:col-start-1 xl:row-start-1', 'xl:col-start-2 xl:row-start-1', 'xl:col-start-3 xl:row-start-1'],
   4: [
     'xl:col-start-1 xl:row-start-1',
@@ -54,8 +56,25 @@ const SOURCE_COLUMN_CLASSES_BY_LIMIT: Record<number, string[]> = {
     'xl:col-start-3 xl:row-start-1',
     'xl:col-start-4 xl:row-start-1',
   ],
+  5: [
+    'xl:col-start-1 xl:row-start-1',
+    'xl:col-start-2 xl:row-start-1',
+    'xl:col-start-3 xl:row-start-1',
+    'xl:col-start-4 xl:row-start-1',
+    'xl:col-start-5 xl:row-start-1',
+  ],
+  6: [
+    'xl:col-start-1 xl:row-start-1',
+    'xl:col-start-2 xl:row-start-1',
+    'xl:col-start-3 xl:row-start-1',
+    'xl:col-start-4 xl:row-start-1',
+    'xl:col-start-5 xl:row-start-1',
+    'xl:col-start-6 xl:row-start-1',
+  ],
 };
-const POSE2D_COLUMN_CLASSES_BY_LIMIT: Record<number, string[]> = {
+const POSE2D_COLUMN_CLASSES_BY_COUNT: Record<number, string[]> = {
+  1: ['xl:col-start-1 xl:row-start-2'],
+  2: ['xl:col-start-1 xl:row-start-2', 'xl:col-start-2 xl:row-start-2'],
   3: ['xl:col-start-1 xl:row-start-2', 'xl:col-start-2 xl:row-start-2', 'xl:col-start-3 xl:row-start-2'],
   4: [
     'xl:col-start-1 xl:row-start-2',
@@ -63,18 +82,40 @@ const POSE2D_COLUMN_CLASSES_BY_LIMIT: Record<number, string[]> = {
     'xl:col-start-3 xl:row-start-2',
     'xl:col-start-4 xl:row-start-2',
   ],
+  5: [
+    'xl:col-start-1 xl:row-start-2',
+    'xl:col-start-2 xl:row-start-2',
+    'xl:col-start-3 xl:row-start-2',
+    'xl:col-start-4 xl:row-start-2',
+    'xl:col-start-5 xl:row-start-2',
+  ],
+  6: [
+    'xl:col-start-1 xl:row-start-2',
+    'xl:col-start-2 xl:row-start-2',
+    'xl:col-start-3 xl:row-start-2',
+    'xl:col-start-4 xl:row-start-2',
+    'xl:col-start-5 xl:row-start-2',
+    'xl:col-start-6 xl:row-start-2',
+  ],
 };
-const GRID_CLASSES_BY_LIMIT: Record<number, string> = {
+const GRID_CLASSES_BY_COUNT: Record<number, string> = {
+  1: 'grid grid-cols-1 items-stretch gap-4 xl:grid-cols-2 xl:auto-rows-[minmax(264px,1fr)]',
+  2: 'grid grid-cols-1 items-stretch gap-4 xl:grid-cols-3 xl:auto-rows-[minmax(264px,1fr)]',
   3: 'grid grid-cols-1 items-stretch gap-4 xl:grid-cols-4 xl:auto-rows-[minmax(264px,1fr)]',
   4: 'grid grid-cols-1 items-stretch gap-4 xl:grid-cols-5 xl:auto-rows-[minmax(264px,1fr)]',
+  5: 'grid grid-cols-1 items-stretch gap-4 xl:grid-cols-6 xl:auto-rows-[minmax(264px,1fr)]',
+  6: 'grid grid-cols-1 items-stretch gap-4 xl:grid-cols-7 xl:auto-rows-[minmax(264px,1fr)]',
 };
-const POSE3D_CARD_CLASSES_BY_LIMIT: Record<number, string> = {
+const POSE3D_CARD_CLASSES_BY_COUNT: Record<number, string> = {
+  1: 'flex min-h-[560px] flex-col rounded-xl border border-zinc-200 bg-stone-50 p-3 xl:col-start-2 xl:row-start-1 xl:row-span-2 xl:min-h-0',
+  2: 'flex min-h-[560px] flex-col rounded-xl border border-zinc-200 bg-stone-50 p-3 xl:col-start-3 xl:row-start-1 xl:row-span-2 xl:min-h-0',
   3: 'flex min-h-[560px] flex-col rounded-xl border border-zinc-200 bg-stone-50 p-3 xl:col-start-4 xl:row-start-1 xl:row-span-2 xl:min-h-0',
   4: 'flex min-h-[560px] flex-col rounded-xl border border-zinc-200 bg-stone-50 p-3 xl:col-start-5 xl:row-start-1 xl:row-span-2 xl:min-h-0',
+  5: 'flex min-h-[560px] flex-col rounded-xl border border-zinc-200 bg-stone-50 p-3 xl:col-start-6 xl:row-start-1 xl:row-span-2 xl:min-h-0',
+  6: 'flex min-h-[560px] flex-col rounded-xl border border-zinc-200 bg-stone-50 p-3 xl:col-start-7 xl:row-start-1 xl:row-span-2 xl:min-h-0',
 };
 const TRAIN_PROGRESS_STALL_MS = 20_000;
 const SYNC_DRIFT_TOLERANCE = 0.06;
-const DEFAULT_DISPLAY_VIEW_LIMIT = 3;
 
 function formatBytes(sizeBytes: number): string {
   if (sizeBytes < 1024) {
@@ -191,7 +232,6 @@ export default function DemoPage() {
   const [posePreviewError, setPosePreviewError] = useState('');
   const [groupPrepareDone, setGroupPrepareDone] = useState(0);
   const [groupPrepareTotal, setGroupPrepareTotal] = useState(0);
-  const [displayViewLimit, setDisplayViewLimit] = useState(DEFAULT_DISPLAY_VIEW_LIMIT);
   const [selectedDatasetId, setSelectedDatasetId] = useState('');
   const [selectedStandardId, setSelectedStandardId] = useState('');
   const [selectedGroupKey, setSelectedGroupKey] = useState('');
@@ -221,6 +261,7 @@ export default function DemoPage() {
   const [progressUpdatedAt, setProgressUpdatedAt] = useState(0);
   const [progressWatchTs, setProgressWatchTs] = useState(0);
   const sourceVideoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
+  const pose2dVideoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
   const syncTickerRef = useRef<number | null>(null);
   const syncCurrentTimeRef = useRef(0);
   const syncUiUpdateAtRef = useRef(0);
@@ -411,22 +452,21 @@ export default function DemoPage() {
     return [...groups.entries()]
       .map(([key, samples]) => {
         const ordered = [...samples].sort((left, right) => left.name.localeCompare(right.name));
-        const visible = ordered.slice(0, displayViewLimit);
         const headName = ordered[0]?.name ?? key;
-        const readyCount = visible.filter((item) => item.pose2d_exists && item.pose3d_exists).length;
-        const completedViews = readyCount === visible.length ? readyCount : 0;
+        const readyCount = ordered.filter((item) => item.pose2d_exists && item.pose3d_exists).length;
+        const completedViews = readyCount === ordered.length ? readyCount : 0;
         return {
           key,
-          samples: visible,
+          samples: ordered,
           label: headName.replace(CAMERA_TOKEN_PATTERN, '_c*_'),
-          totalSizeBytes: visible.reduce((sum, item) => sum + item.size_bytes, 0),
+          totalSizeBytes: ordered.reduce((sum, item) => sum + item.size_bytes, 0),
           generatedViews: readyCount,
           completedViews,
-          totalViews: visible.length,
+          totalViews: ordered.length,
         };
       })
       .sort((left, right) => left.label.localeCompare(right.label));
-  }, [displayViewLimit, sourcePreview]);
+  }, [sourcePreview]);
 
   useEffect(() => {
     if (sourceGroups.length === 0) {
@@ -514,14 +554,8 @@ export default function DemoPage() {
     () => playbackGroups.find((group) => group.key === selectedGroupKey) ?? playbackGroups[0] ?? null,
     [playbackGroups, selectedGroupKey],
   );
-  const currentGroupAllSamples = useMemo(
-    () => (currentGroup?.samples ?? []).slice(0, displayViewLimit),
-    [currentGroup, displayViewLimit],
-  );
-  const currentGroupSamples = useMemo(
-    () => (currentGroup?.samples ?? []).slice(0, displayViewLimit),
-    [currentGroup, displayViewLimit],
-  );
+  const currentGroupAllSamples = useMemo(() => currentGroup?.samples ?? [], [currentGroup]);
+  const currentGroupSamples = useMemo(() => currentGroup?.samples ?? [], [currentGroup]);
   const asyncTrainGroup = useMemo(() => {
     if (playbackGroups.length === 0) {
       return null;
@@ -724,7 +758,7 @@ export default function DemoPage() {
   const curvesUrl = artifactStatus?.curves_exists ? `${backendBaseUrl}${artifactStatus.curves_url}` : '';
   const viewSlots = useMemo(
     () =>
-      Array.from({ length: displayViewLimit }, (_, index) => {
+      Array.from({ length: currentGroupSamples.length }, (_, index) => {
         const sample = currentGroupSamples[index] ?? null;
         if (!sample) {
           return {
@@ -752,7 +786,7 @@ export default function DemoPage() {
           cameraLabel: parseCameraLabel(sample),
         };
       }),
-    [currentGroupSamples, displayViewLimit, posePreviewMap],
+    [currentGroupSamples, posePreviewMap],
   );
 
   const syncPose3dDataUrl = useMemo(() => {
@@ -790,12 +824,13 @@ export default function DemoPage() {
   const syncReady = Boolean(
     syncPose3dDataUrl &&
     activeViewSlots.length > 0 &&
-    activeViewSlots.every((slot) => slot.sourceVideoUrl && slot.pose2dDataUrl),
+    activeViewSlots.every((slot) => slot.sourceVideoUrl && slot.pose2dVideoUrl),
   );
-  const sourceColumnClasses = SOURCE_COLUMN_CLASSES_BY_LIMIT[displayViewLimit] ?? SOURCE_COLUMN_CLASSES_BY_LIMIT[DEFAULT_DISPLAY_VIEW_LIMIT];
-  const pose2dColumnClasses = POSE2D_COLUMN_CLASSES_BY_LIMIT[displayViewLimit] ?? POSE2D_COLUMN_CLASSES_BY_LIMIT[DEFAULT_DISPLAY_VIEW_LIMIT];
-  const syncGridClasses = GRID_CLASSES_BY_LIMIT[displayViewLimit] ?? GRID_CLASSES_BY_LIMIT[DEFAULT_DISPLAY_VIEW_LIMIT];
-  const pose3dCardClasses = POSE3D_CARD_CLASSES_BY_LIMIT[displayViewLimit] ?? POSE3D_CARD_CLASSES_BY_LIMIT[DEFAULT_DISPLAY_VIEW_LIMIT];
+  const layoutViewCount = Math.max(1, Math.min(activeViewSlots.length || currentGroupSamples.length || 1, MAX_LAYOUT_VIEW_COUNT));
+  const sourceColumnClasses = SOURCE_COLUMN_CLASSES_BY_COUNT[layoutViewCount] ?? SOURCE_COLUMN_CLASSES_BY_COUNT[MAX_LAYOUT_VIEW_COUNT];
+  const pose2dColumnClasses = POSE2D_COLUMN_CLASSES_BY_COUNT[layoutViewCount] ?? POSE2D_COLUMN_CLASSES_BY_COUNT[MAX_LAYOUT_VIEW_COUNT];
+  const syncGridClasses = GRID_CLASSES_BY_COUNT[layoutViewCount] ?? GRID_CLASSES_BY_COUNT[MAX_LAYOUT_VIEW_COUNT];
+  const pose3dCardClasses = POSE3D_CARD_CLASSES_BY_COUNT[layoutViewCount] ?? POSE3D_CARD_CLASSES_BY_COUNT[MAX_LAYOUT_VIEW_COUNT];
 
   const masterSourcePath = currentGroupSamples[0]?.path ?? '';
   const getMasterSourceVideo = useCallback(() => {
@@ -811,6 +846,10 @@ export default function DemoPage() {
       const sourceNode = sourceVideoRefs.current[sample.path];
       if (sourceNode) {
         nodes.push(sourceNode);
+      }
+      const pose2dNode = pose2dVideoRefs.current[sample.path];
+      if (pose2dNode) {
+        nodes.push(pose2dNode);
       }
     }
     return nodes;
@@ -1060,6 +1099,7 @@ export default function DemoPage() {
     syncCurrentTimeRef.current = 0;
     syncUiUpdateAtRef.current = 0;
     sourceVideoRefs.current = {};
+    pose2dVideoRefs.current = {};
     if (syncTickerRef.current !== null) {
       window.cancelAnimationFrame(syncTickerRef.current);
       syncTickerRef.current = null;
@@ -1079,7 +1119,7 @@ export default function DemoPage() {
     if (!syncPlaying || !nextGroup) {
       return;
     }
-    const targetSamples = nextGroup.samples.slice(0, displayViewLimit);
+    const targetSamples = nextGroup.samples;
     if (targetSamples.length === 0) {
       return;
     }
@@ -1103,7 +1143,7 @@ export default function DemoPage() {
     return () => {
       cancelled = true;
     };
-  }, [displayViewLimit, ensureGroupPosePreview, nextGroup, syncPlaying]);
+  }, [ensureGroupPosePreview, nextGroup, syncPlaying]);
 
   useEffect(() => {
     if (followTraining) {
@@ -1297,7 +1337,7 @@ export default function DemoPage() {
       const jobId = await createTrainJob({
         dataset_id: selectedDatasetId,
         config: trainConfigPath,
-        export_onnx: true,
+        export_onnx: false,
       });
       setFollowTraining(true);
       setFollowTrainJobId(jobId);
@@ -1609,7 +1649,7 @@ export default function DemoPage() {
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
               <h2 className="flex items-center gap-2 text-base font-bold text-zinc-800">
                 <Film size={18} />
-                四联同步可视化
+                多视角同步可视化
               </h2>
               <div className="flex items-center gap-2">
                 <Button
@@ -1631,14 +1671,6 @@ export default function DemoPage() {
               <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                 <p className="text-xs font-bold uppercase tracking-wider text-zinc-500">素材组（同一动作不同 camera）</p>
                 <div className="flex items-center gap-2">
-                  <select
-                    value={displayViewLimit}
-                    onChange={(event) => setDisplayViewLimit(Number(event.target.value))}
-                    className="h-7 rounded-md border border-zinc-200 bg-white px-2 text-xs"
-                  >
-                    <option value={3}>显示 3 视角</option>
-                    <option value={4}>显示 4 视角</option>
-                  </select>
                   <Button variant="outline" size="sm" className="h-7 px-2 text-xs" onClick={selectAllGroups}>
                     全选
                   </Button>
@@ -1861,16 +1893,25 @@ export default function DemoPage() {
                   <h3 className="mb-2 text-sm font-bold text-zinc-800">
                     2D骨架 {index + 1} · {slot.cameraLabel}
                   </h3>
-                  {slot.pose2dDataUrl ? (
-                    <Pose2DViewport
-                      key={slot.pose2dDataUrl || slot.sample?.path || slot.cameraLabel}
-                      dataUrl={slot.pose2dDataUrl}
-                      currentTime={syncCurrentTime}
-                      videoSrc={slot.sourceVideoUrl}
-                      playing={syncPlaying}
-                      className="h-56 w-full"
-                      emptyText="当前视角暂无 2D 骨架"
-                    />
+                  {slot.pose2dVideoUrl ? (
+                    <video
+                      key={`pose2d-video-${slot.pose2dVideoUrl || slot.sample?.path || index}`}
+                      ref={(node) => {
+                        if (slot.sample) {
+                          pose2dVideoRefs.current[slot.sample.path] = node;
+                        }
+                      }}
+                      controls={false}
+                      preload="auto"
+                      playsInline
+                      muted
+                      onLoadedMetadata={(event) => handleSyncLoadedMetadata(event.currentTarget)}
+                      onLoadedData={(event) => handleVideoLoadedData(event.currentTarget)}
+                      className="h-56 w-full rounded-lg border border-zinc-200 bg-stone-100 object-contain shadow-inner"
+                    >
+                      <source src={slot.pose2dVideoUrl} type="video/mp4" />
+                      当前浏览器无法播放视频，请检查编解码格式。
+                    </video>
                   ) : (
                     <div className="flex h-56 w-full items-center justify-center rounded-lg border border-dashed border-zinc-300 bg-white text-sm text-zinc-500">
                       {posePreviewLoading ? '正在生成 2D 骨架...' : '当前视角暂无 2D 骨架'}

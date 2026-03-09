@@ -60,6 +60,7 @@ class JobRunner:
                 process = subprocess.Popen(
                     command,
                     cwd=str(self.cwd),
+                    stdin=subprocess.DEVNULL,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
