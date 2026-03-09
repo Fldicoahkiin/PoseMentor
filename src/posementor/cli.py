@@ -1068,7 +1068,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_config.add_argument("--frontend-host", default="127.0.0.1", help="前端服务监听地址")
     p_config.add_argument("--frontend-port", type=int, default=7860, help="前端服务端口")
     p_config.add_argument("--dataset-id", default="aistpp", help="默认训练数据集 ID")
-    p_config.add_argument("--standard-id", default="private_action_core", help="默认评分标准库 ID")
+    p_config.add_argument("--standard-id", default="aist_baseline_reference", help="默认评分标准库 ID")
     p_config.add_argument(
         "--aist-video-profile",
         choices=list(AIST_VIDEO_PROFILES.keys()),

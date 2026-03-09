@@ -16,7 +16,7 @@ DEFAULT_LOCAL_CONFIG: dict[str, Any] = {
     },
     "defaults": {
         "dataset_id": "aistpp",
-        "standard_id": "private_action_core",
+        "standard_id": "aist_baseline_reference",
         "train_config": "configs/train.yaml",
         "data_config": "configs/data.yaml",
         "aist_video_profile": "mv3_quick",

@@ -35,6 +35,7 @@ from posementor.pipeline.preview_renderer import (
     build_pose3d_preview_data,
     find_sequence_id,
     render_pose_preview_videos,
+    render_source_preview_video,
 )
 from posementor.utils.io import ensure_dir, load_yaml, save_yaml
 
@@ -152,6 +153,25 @@ def _read_dataset_registry() -> dict:
     return {"datasets": datasets}
 
 
+def _standard_priority(item: object) -> tuple[int, str]:
+    if not isinstance(item, dict):
+        return (9, "")
+    standard_id = str(item.get("id", "")).strip().lower()
+    name = str(item.get("name", "")).strip().lower()
+    source = str(item.get("source", "")).strip().lower()
+    stage = str(item.get("stage", "")).strip().lower()
+    is_aist = "aist" in standard_id or "aist" in name
+    if is_aist and stage == "active":
+        return (0, standard_id)
+    if is_aist:
+        return (1, standard_id)
+    if source == "private" and stage == "active":
+        return (2, standard_id)
+    if source == "private":
+        return (3, standard_id)
+    return (4, standard_id)
+
+
 def _read_standard_registry() -> dict:
     if not STANDARD_REGISTRY_FILE.exists():
         return {"standards": []}
@@ -161,7 +181,8 @@ def _read_standard_registry() -> dict:
     standards = data.get("standards", [])
     if not isinstance(standards, list):
         standards = []
-    return {"standards": standards}
+    ordered = sorted(standards, key=_standard_priority)
+    return {"standards": ordered}
 
 
 def _find_dataset(dataset_id: str) -> dict | None:
@@ -532,6 +553,16 @@ def _build_preview_cache_key(paths: list[Path]) -> str:
 
 
 
+def _preview_pipeline_mtime_ns() -> int:
+    files = {
+        Path(__file__),
+        Path(render_pose_preview_videos.__code__.co_filename),
+        Path(build_pose2d_preview_data.__code__.co_filename),
+    }
+    return max(path.stat().st_mtime_ns for path in files if path.exists())
+
+
+
 def _workspace_pose_preview_aist(
     dataset_id: str,
     source_video: Path,
@@ -617,9 +648,7 @@ def _workspace_pose_preview_aist(
 
         cache_dir = ensure_dir(OUTPUT_ROOT / "preview_cache" / dataset_id)
         output_source = cache_dir / f"{source_seq_id}_source.mp4"
-        output_2d = cache_dir / f"{source_seq_id}_pose2d.mp4"
         output_2d_data = cache_dir / f"{source_seq_id}_pose2d.json"
-        output_3d = cache_dir / f"{group_seq_id}_pose3d.mp4"
         output_3d_data = cache_dir / f"{group_seq_id}_pose3d.json"
 
         dep_mtime = max(
@@ -627,44 +656,29 @@ def _workspace_pose_preview_aist(
             gt_file.stat().st_mtime_ns,
             keypoints2d_file.stat().st_mtime_ns,
             alignment_file.stat().st_mtime_ns if alignment_file.exists() else 0,
+            _preview_pipeline_mtime_ns(),
         )
-        need_render = bool(refresh)
-        for file_path in (output_source, output_2d, output_3d):
-            if not file_path.exists():
-                need_render = True
-                break
-        if not need_render:
-            output_mtime = min(
-                output_source.stat().st_mtime_ns,
-                output_2d.stat().st_mtime_ns,
-                output_3d.stat().st_mtime_ns,
-            )
-            need_render = output_mtime < dep_mtime
-        if not need_render:
-            need_render = not all(
-                _preview_video_cache_valid(file_path)
-                for file_path in (output_source, output_2d, output_3d)
-            )
+        need_render = bool(refresh) or not output_source.exists()
+        if output_source.exists() and not need_render:
+            need_render = output_source.stat().st_mtime_ns < dep_mtime
+        if output_source.exists() and not need_render:
+            need_render = not _preview_video_cache_valid(output_source)
 
         stats: dict[str, float] = {
             "fps": float(video_stats[camera_id]["fps"]),
             "frames": float(frame_total),
         }
         if need_render:
-            stats = render_pose_preview_videos(
+            stats = render_source_preview_video(
                 source_video=source_video,
-                keypoints2d=keypoints2d,
-                joints3d=joints3d_view,
                 output_source=output_source,
-                output_2d=output_2d,
-                output_3d=output_3d,
                 source_frame_offset=camera_trim_start,
                 frame_total=frame_total,
             )
 
         source_width = int(video_stats[camera_id]["width"])
         source_height = int(video_stats[camera_id]["height"])
-        expected_frame_total = frame_total
+        expected_frame_total = int(stats["frames"])
 
         need_export_pose2d_data = bool(refresh) or not output_2d_data.exists()
         if output_2d_data.exists() and not need_export_pose2d_data:
@@ -737,16 +751,16 @@ def _workspace_pose_preview_aist(
             },
         }
         cache_key = _build_preview_cache_key(
-            [output_source, output_2d, output_2d_data, output_3d, output_3d_data, alignment_file]
+            [output_source, output_2d_data, output_3d_data, alignment_file]
         )
         return {
             "dataset_id": dataset_id,
             "seq_id": group_seq_id,
             "camera_id": camera_id,
             "source_video_url": f"/outputs-files/preview_cache/{dataset_id}/{output_source.name}",
-            "pose2d_video_url": f"/outputs-files/preview_cache/{dataset_id}/{output_2d.name}",
+            "pose2d_video_url": "",
             "pose2d_data_url": f"/outputs-files/preview_cache/{dataset_id}/{output_2d_data.name}",
-            "pose3d_video_url": f"/outputs-files/preview_cache/{dataset_id}/{output_3d.name}",
+            "pose3d_video_url": "",
             "pose3d_data_url": f"/outputs-files/preview_cache/{dataset_id}/{output_3d_data.name}",
             "cache_key": cache_key,
             "fps": stats["fps"],
@@ -1014,16 +1028,21 @@ def workspace_pose_preview(
     source_width = int(source_cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 960)
     source_height = int(source_cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 540)
     source_cap.release()
-    source_mtime = source_video.stat().st_mtime
-    dep_mtime = max(pose2d_dep_file.stat().st_mtime, gt_file.stat().st_mtime, source_mtime)
+    source_mtime = source_video.stat().st_mtime_ns
+    dep_mtime = max(
+        pose2d_dep_file.stat().st_mtime_ns,
+        gt_file.stat().st_mtime_ns,
+        source_mtime,
+        _preview_pipeline_mtime_ns(),
+    )
     need_render = bool(refresh)
     if not (output_source.exists() and output_2d.exists() and output_3d.exists()):
         need_render = True
     else:
         output_mtime = min(
-            output_source.stat().st_mtime,
-            output_2d.stat().st_mtime,
-            output_3d.stat().st_mtime,
+            output_source.stat().st_mtime_ns,
+            output_2d.stat().st_mtime_ns,
+            output_3d.stat().st_mtime_ns,
         )
         if not need_render:
             need_render = output_mtime < dep_mtime
@@ -1050,7 +1069,7 @@ def workspace_pose_preview(
     expected_frame_total = int(stats["frames"])
     need_export_pose2d_data = bool(refresh) or not output_2d_data.exists()
     if output_2d_data.exists() and not need_export_pose2d_data:
-        need_export_pose2d_data = output_2d_data.stat().st_mtime < dep_mtime
+        need_export_pose2d_data = output_2d_data.stat().st_mtime_ns < dep_mtime
     if output_2d_data.exists() and not need_export_pose2d_data:
         try:
             pose2d_meta = json.loads(output_2d_data.read_text(encoding="utf-8"))
@@ -1079,7 +1098,7 @@ def workspace_pose_preview(
 
     need_export_pose3d_data = bool(refresh) or not output_3d_data.exists()
     if output_3d_data.exists() and not need_export_pose3d_data:
-        need_export_pose3d_data = output_3d_data.stat().st_mtime < dep_mtime
+        need_export_pose3d_data = output_3d_data.stat().st_mtime_ns < dep_mtime
     if output_3d_data.exists() and not need_export_pose3d_data:
         try:
             pose3d_meta = json.loads(output_3d_data.read_text(encoding="utf-8"))

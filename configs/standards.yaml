@@ -1,4 +1,10 @@
 standards:
+  - id: aist_baseline_reference
+    name: "AIST++ 基线参考"
+    source: "public"
+    stage: "experimental"
+    notes: "当前阶段默认展示在前，仅用于基础能力对齐，不作为正式评分标准。"
+
   - id: private_action_core
     name: "自有标准动作库"
     source: "private"
@@ -10,9 +16,3 @@ standards:
     source: "private"
     stage: "planned"
     notes: "用于新动作模板和评分规则试验。"
-
-  - id: aist_baseline_reference
-    name: "AIST++ 基线参考"
-    source: "public"
-    stage: "experimental"
-    notes: "仅用于基础能力对齐，不作为正式评分标准。"
