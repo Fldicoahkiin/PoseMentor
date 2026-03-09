@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 from posementor.infra.command_runner import JobRunner
 from posementor.infra.job_store import JobRecord, JobStore
+from posementor.multiview.naming import build_video_rel_path, build_video_seq_id
 from posementor.pipeline.preview_renderer import (
     POSE3D_PREVIEW_VERSION,
     build_pose2d_preview_data,
@@ -90,6 +91,12 @@ class TrainRequest(BaseModel):
 
 class MultiViewRequest(BaseModel):
     config: str = "configs/multiview.yaml"
+    limit_sessions: int = 0
+
+
+class MultiViewTriangulateRequest(BaseModel):
+    config: str = "configs/multiview.yaml"
+    calibration: str | None = None
     limit_sessions: int = 0
 
 
@@ -268,7 +275,7 @@ def _parse_job_progress(job: JobRecord, log_text: str) -> dict[str, object]:
         phase = "extract"
     elif "data_prepare" in job.name:
         phase = "prepare"
-    elif "multiview_prepare" in job.name:
+    elif "multiview_prepare" in job.name or "multiview_triangulate" in job.name:
         phase = "multiview"
 
     progress = 1.0 if status == "succeeded" else 0.0
@@ -557,13 +564,21 @@ def source_preview(dataset_id: str = "aistpp", limit: int = 3) -> dict[str, obje
         raise HTTPException(status_code=404, detail=f"dataset_id={dataset_id} 未注册")
     video_root = _resolve_dataset_video_root(_normalize_dataset_item(dataset))
     preview_cache_dir = OUTPUT_ROOT / "preview_cache" / dataset_id
+    yolo_dir, gt_dir = _resolve_pose_dirs_from_dataset(_normalize_dataset_item(dataset))
 
     samples: list[dict[str, object]] = []
     if video_root.exists():
         candidates = sorted(video_root.rglob("*.mp4"))
         grouped: dict[str, list[Path]] = {}
+        is_multiview = str(dataset.get("mode", "")).strip() == "multiview"
         for path in candidates:
-            key = _video_group_key(path)
+            if is_multiview:
+                try:
+                    key = path.parent.relative_to(video_root).as_posix() or path.parent.name
+                except ValueError:
+                    key = path.parent.name
+            else:
+                key = _video_group_key(path)
             grouped.setdefault(key, []).append(path)
 
         selected_keys = sorted(grouped.keys())[:bounded_limit]
@@ -571,15 +586,16 @@ def source_preview(dataset_id: str = "aistpp", limit: int = 3) -> dict[str, obje
             group_rows: list[dict[str, object]] = []
             for path in sorted(grouped[group_key]):
                 camera_match = re.search(r"_c(\d+)_", path.stem)
-                camera_id = f"c{camera_match.group(1)}" if camera_match else ""
+                camera_id = f"c{camera_match.group(1)}" if camera_match else path.stem.lower()
                 rel_project = _to_project_relative(path)
                 stat = path.stat()
                 url = ""
                 if path.is_relative_to(DATA_ROOT):
                     rel_data = path.relative_to(DATA_ROOT).as_posix()
                     url = f"/data-files/{rel_data}"
-                pose2d_file = preview_cache_dir / f"{path.stem}_pose2d.mp4"
-                pose3d_file = preview_cache_dir / f"{path.stem}_pose3d.mp4"
+                seq_id = build_video_seq_id(video_root=video_root, video_path=path)
+                pose2d_file = preview_cache_dir / f"{seq_id}_pose2d.mp4"
+                pose3d_file = preview_cache_dir / f"{seq_id}_pose3d.mp4"
                 group_rows.append(
                     {
                         "name": path.name,
@@ -588,8 +604,10 @@ def source_preview(dataset_id: str = "aistpp", limit: int = 3) -> dict[str, obje
                         "size_bytes": stat.st_size,
                         "group_key": group_key,
                         "camera_id": camera_id,
-                        "pose2d_exists": pose2d_file.exists(),
-                        "pose3d_exists": pose3d_file.exists(),
+                        "pose2d_exists": pose2d_file.exists()
+                        or (yolo_dir / f"{seq_id}.npz").exists(),
+                        "pose3d_exists": pose3d_file.exists()
+                        or (gt_dir / f"{seq_id}.npz").exists(),
                     }
                 )
             group_ready = all(
@@ -647,21 +665,26 @@ def workspace_pose_preview(
 
     source_name = source_video.name
     source_stem = source_video.stem
+    dataset_video_root = _resolve_dataset_video_root(_normalize_dataset_item(dataset))
+    source_video_rel = build_video_rel_path(video_root=dataset_video_root, video_path=source_video)
+    source_seq_id = build_video_seq_id(video_root=dataset_video_root, video_path=source_video)
 
     fallback_seq_id = find_sequence_id(
         yolo2d_dir=yolo_dir,
         video_stem=source_stem,
         source_video_name=source_name,
+        source_video_rel=source_video_rel,
     )
-    gt_seq_id = _resolve_gt_seq_id(gt_dir=gt_dir, source_stem=source_stem, source_name=source_name)
-    if not gt_seq_id and fallback_seq_id:
-        gt_seq_id = _resolve_existing_gt_seq_id(
-            gt_dir=gt_dir,
-            candidates=[
-                fallback_seq_id,
-                CAMERA_TOKEN_PATTERN.sub("_cAll_", fallback_seq_id),
-            ],
-        )
+    gt_seq_id = _resolve_existing_gt_seq_id(
+        gt_dir=gt_dir,
+        candidates=[
+            source_seq_id,
+            source_stem,
+            CAMERA_TOKEN_PATTERN.sub("_cAll_", source_stem),
+            fallback_seq_id,
+            CAMERA_TOKEN_PATTERN.sub("_cAll_", fallback_seq_id) if fallback_seq_id else "",
+        ],
+    )
     if not gt_seq_id:
         raise HTTPException(status_code=404, detail=f"未找到视频对应 3D 序列: {source_name}")
     gt_file = gt_dir / f"{gt_seq_id}.npz"
@@ -671,8 +694,9 @@ def workspace_pose_preview(
         joints3d = gt_data["joints3d"].astype(np.float32)
 
     preview_pose_cache_dir = ensure_dir(OUTPUT_ROOT / "preview_cache" / dataset_id / "pose2d_npz")
-    source_pose2d_cache = preview_pose_cache_dir / f"{source_stem}.npz"
-    source_pose2d_file = yolo_dir / f"{source_stem}.npz"
+    source_pose2d_cache = preview_pose_cache_dir / f"{source_seq_id}.npz"
+    source_pose2d_file = yolo_dir / f"{source_seq_id}.npz"
+    direct_pose2d_file = yolo_dir / f"{source_stem}.npz"
     fallback_pose2d_file = yolo_dir / f"{fallback_seq_id}.npz" if fallback_seq_id else None
 
     keypoints2d: np.ndarray
@@ -681,6 +705,9 @@ def workspace_pose_preview(
     if source_pose2d_file.exists():
         keypoints2d, fps_value = _load_keypoints2d(source_pose2d_file)
         pose2d_dep_file = source_pose2d_file
+    elif direct_pose2d_file.exists():
+        keypoints2d, fps_value = _load_keypoints2d(direct_pose2d_file)
+        pose2d_dep_file = direct_pose2d_file
     elif source_pose2d_cache.exists():
         keypoints2d, fps_value = _load_keypoints2d(source_pose2d_cache)
         pose2d_dep_file = source_pose2d_cache
@@ -709,11 +736,12 @@ def workspace_pose_preview(
             pose2d_dep_file = fallback_pose2d_file
 
     cache_dir = ensure_dir(OUTPUT_ROOT / "preview_cache" / dataset_id)
-    output_source = cache_dir / f"{source_stem}_source.mp4"
-    output_2d = cache_dir / f"{source_stem}_pose2d.mp4"
-    output_2d_data = cache_dir / f"{source_stem}_pose2d.json"
-    output_3d = cache_dir / f"{source_stem}_pose3d.mp4"
-    output_3d_data = cache_dir / f"{source_stem}_pose3d.json"
+    cache_stem = source_seq_id
+    output_source = cache_dir / f"{cache_stem}_source.mp4"
+    output_2d = cache_dir / f"{cache_stem}_pose2d.mp4"
+    output_2d_data = cache_dir / f"{cache_stem}_pose2d.json"
+    output_3d = cache_dir / f"{cache_stem}_pose3d.mp4"
+    output_3d_data = cache_dir / f"{cache_stem}_pose3d.json"
     source_cap = cv2.VideoCapture(str(source_video))
     source_width = int(source_cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 960)
     source_height = int(source_cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 540)
@@ -1081,6 +1109,25 @@ def start_multiview_prepare(req: MultiViewRequest) -> dict[str, str]:
         command.extend(["--limit-sessions", str(req.limit_sessions)])
 
     job_id = runner.submit(name="multiview_prepare", command=command)
+    return {"job_id": job_id}
+
+
+@app.post("/jobs/multiview/triangulate")
+def start_multiview_triangulate(req: MultiViewTriangulateRequest) -> dict[str, str]:
+    command = [
+        "uv",
+        "run",
+        "python",
+        "triangulate_multiview_dataset.py",
+        "--config",
+        req.config,
+    ]
+    if req.calibration:
+        command.extend(["--calibration", req.calibration])
+    if req.limit_sessions > 0:
+        command.extend(["--limit-sessions", str(req.limit_sessions)])
+
+    job_id = runner.submit(name="multiview_triangulate", command=command)
     return {"job_id": job_id}
 
 

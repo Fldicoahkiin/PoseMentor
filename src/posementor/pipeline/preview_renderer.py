@@ -9,6 +9,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from posementor.multiview.naming import build_seq_id_from_rel_path
 from posementor.utils.joints import SKELETON_EDGES
 from posementor.utils.visualize import draw_pose_2d
 
@@ -36,10 +37,17 @@ def find_sequence_id(
     yolo2d_dir: Path,
     video_stem: str,
     source_video_name: str,
+    source_video_rel: str = "",
 ) -> str | None:
     direct = yolo2d_dir / f"{video_stem}.npz"
     if direct.exists():
         return video_stem
+
+    if source_video_rel:
+        rel_seq_id = build_seq_id_from_rel_path(source_video_rel)
+        rel_file = yolo2d_dir / f"{rel_seq_id}.npz"
+        if rel_file.exists():
+            return rel_seq_id
 
     call_stem = CAMERA_TOKEN_PATTERN.sub("_cAll_", video_stem)
     if call_stem != video_stem:
@@ -50,6 +58,10 @@ def find_sequence_id(
     for file_path in sorted(yolo2d_dir.glob("*.npz")):
         try:
             with np.load(file_path) as data:
+                if source_video_rel and "source_video_rel" in data.files:
+                    rel_value = str(np.asarray(data["source_video_rel"]).reshape(-1)[0])
+                    if rel_value == source_video_rel:
+                        return file_path.stem
                 if "source_video_name" not in data.files:
                     continue
                 value = str(np.asarray(data["source_video_name"]).reshape(-1)[0])

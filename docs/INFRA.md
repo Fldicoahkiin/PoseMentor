@@ -51,6 +51,7 @@ flowchart LR
 - `POST /jobs/pose/extract`
 - `POST /jobs/train`
 - `POST /jobs/multiview/prepare`
+- `POST /jobs/multiview/triangulate`
 - `POST /jobs/evaluate`
 
 ## 4. 存储与日志

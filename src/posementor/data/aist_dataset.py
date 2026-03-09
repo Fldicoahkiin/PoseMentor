@@ -34,6 +34,12 @@ def _resolve_video_candidate(
     seq_id: str,
     k_data: np.lib.npyio.NpzFile,
 ) -> Path | None:
+    source_video_rel = _read_npz_string(k_data, "source_video_rel")
+    if source_video_rel:
+        direct = videos_root / source_video_rel
+        if direct.exists():
+            return direct
+
     source_video_name = _read_npz_string(k_data, "source_video_name")
     if source_video_name:
         direct = videos_root / source_video_name

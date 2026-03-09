@@ -2,6 +2,10 @@
 
 input_root: data/raw/multiview
 output_root: data/processed/multiview
+processed_root: data/processed/multiview
+pose2d_root: data/processed/multiview/yolo2d
+gt3d_root: data/processed/multiview/gt3d
+calibration_file: ''
 
 # 每个 session 下需要包含以下文件，例如：
 # data/raw/multiview/session_001/front.mp4
@@ -20,3 +24,9 @@ format:
   target_width: 960
   target_height: 540
   max_frames: 0
+
+triangulation:
+  min_views: 2
+  min_confidence: 0.2
+  max_reprojection_error_px: 18.0
+  smooth_alpha: 0.58

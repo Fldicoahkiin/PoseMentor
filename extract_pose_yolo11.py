@@ -8,15 +8,30 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 
+from posementor.multiview.naming import build_video_rel_path, build_video_seq_id
 from posementor.utils.io import ensure_dir, load_yaml
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="使用 YOLO11-Pose 批量提取 AIST++ 2D 关键点")
     parser.add_argument("--config", type=Path, default=Path("configs/data.yaml"))
-    parser.add_argument("--video-root", type=Path, default=None, help="视频目录，默认使用 data.yaml 中的 aist_root/videos_subdir")
-    parser.add_argument("--out-dir", type=Path, default=None, help="输出目录，默认使用 data.yaml 中的 processed_root/yolo2d")
-    parser.add_argument("--recursive", action="store_true", help="递归扫描视频目录，适用于四机位 session 树形目录")
+    parser.add_argument(
+        "--video-root",
+        type=Path,
+        default=None,
+        help="视频目录，默认使用 data.yaml 中的 aist_root/videos_subdir",
+    )
+    parser.add_argument(
+        "--out-dir",
+        type=Path,
+        default=None,
+        help="输出目录，默认使用 data.yaml 中的 processed_root/yolo2d",
+    )
+    parser.add_argument(
+        "--recursive",
+        action="store_true",
+        help="递归扫描视频目录，适用于四机位 session 树形目录",
+    )
     parser.add_argument("--weights", type=str, default="yolo11m-pose.pt")
     parser.add_argument("--conf", type=float, default=0.35)
     parser.add_argument("--max-videos", type=int, default=0, help="仅处理前 N 个视频，0 表示全部")
@@ -93,8 +108,7 @@ def main() -> None:
     print(f"[INFO] 待处理视频数: {len(videos)}")
     for idx, video_path in enumerate(videos, start=1):
         if args.recursive:
-            rel = video_path.relative_to(video_root).with_suffix("")
-            seq_id = "__".join(rel.parts)
+            seq_id = build_video_seq_id(video_root=video_root, video_path=video_path)
         else:
             seq_id = video_path.stem
         out_file = out_root / f"{seq_id}.npz"
@@ -103,16 +117,24 @@ def main() -> None:
             continue
 
         try:
-            keypoints2d, fps = extract_single_video(model=model, video_path=video_path, conf=args.conf)
+            keypoints2d, fps = extract_single_video(
+                model=model,
+                video_path=video_path,
+                conf=args.conf,
+            )
         except Exception as exc:  # noqa: BLE001
             print(f"[WARN] {seq_id} 提取失败: {exc}")
             continue
 
+        source_video_rel = build_video_rel_path(video_root=video_root, video_path=video_path)
         np.savez_compressed(
             out_file,
             keypoints2d=keypoints2d,
             fps=np.array(fps, dtype=np.float32),
             style=np.array(style_from_filename(seq_id)),
+            source_video_name=np.array(video_path.name),
+            source_video_rel=np.array(source_video_rel),
+            camera_id=np.array(video_path.stem.lower()),
         )
         print(f"[DONE] ({idx}/{len(videos)}) {seq_id} -> {out_file}")
 

@@ -131,13 +131,14 @@ flowchart LR
 - 时序对齐：`prepare_multiview_dataset.py`
 - 统一格式导出：`src/posementor/multiview/formatter.py`
 - 四机位 2D 递归提取：`extract_pose_yolo11.py --recursive`
+- 基于标定参数的 3D 三角化：`triangulate_multiview_dataset.py`
 - 报告可视化：`visualize_multiview_report.py`
 
 ### 6.2 规划中
 
 - 标定参数求解与版本管理
-- 三角化 3D 真值生成
 - 三角化质量自动评分与异常剔除
+- UI 侧标定场景选择与结果质检联动
 
 ### 6.3 四机位 3D 真值生成设计
 
@@ -230,5 +231,5 @@ uv run python train_3d_lift_demo.py --config configs/train.yaml --export-onnx
 | AIST++ 单视角训练主链路 | 已实现 |
 | 训练曲线与样例可视化 | 已实现 |
 | 自采四机位对齐与格式化 | 已实现 |
-| 自采四机位三角化 3D 真值 | 规划中 |
+| 自采四机位三角化 3D 真值 | 已实现（基础版） |
 | 多数据源统一注册与选择 | 已实现（dataset registry） |

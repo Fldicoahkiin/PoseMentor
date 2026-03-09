@@ -70,7 +70,11 @@ def detect_motion_start(path: Path, scan_frames: int = 300, motion_ratio: float 
     return 0
 
 
-def analyze_videos(video_paths: list[Path], scan_frames: int, motion_ratio: float) -> list[VideoStats]:
+def analyze_videos(
+    video_paths: list[Path],
+    scan_frames: int,
+    motion_ratio: float,
+) -> list[VideoStats]:
     stats: list[VideoStats] = []
     for path in video_paths:
         fps, frames, width, height = _read_video_meta(path)

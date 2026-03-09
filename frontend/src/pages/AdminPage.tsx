@@ -5,6 +5,7 @@ import {
   createDataPrepareJob,
   createEvaluateJob,
   createMultiviewJob,
+  createMultiviewTriangulateJob,
   createPoseExtractJob,
   createTrainJob,
   fetchDatasets,
@@ -57,6 +58,7 @@ export default function AdminPage() {
   const [exportOnnx, setExportOnnx] = useState(true);
 
   const [multiviewConfig, setMultiviewConfig] = useState('configs/multiview.yaml');
+  const [multiviewCalibration, setMultiviewCalibration] = useState('configs/calibration/fourview_template.yaml');
   const [limitSessions, setLimitSessions] = useState(20);
 
   const [evalInputDir, setEvalInputDir] = useState('data/raw/aistpp/videos');
@@ -587,12 +589,20 @@ export default function AdminPage() {
           {tab === 'multiview' && (
             <div className="space-y-4">
               <h3 className="text-lg font-bold text-zinc-900">多机位处理任务</h3>
-              <input value={multiviewConfig} onChange={(e) => setMultiviewConfig(e.target.value)} className="w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm" />
+              <input value={multiviewConfig} onChange={(e) => setMultiviewConfig(e.target.value)} placeholder="多机位配置文件" className="w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm" />
+              <input value={multiviewCalibration} onChange={(e) => setMultiviewCalibration(e.target.value)} placeholder="标定文件路径" className="w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm" />
               <input type="number" value={limitSessions} onChange={(e) => setLimitSessions(Number(e.target.value))} className="w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm" />
-              <Button disabled={busy} className="h-11 w-full gap-2" onClick={() => void runTask(() => createMultiviewJob({
-                config: multiviewConfig,
-                limit_sessions: limitSessions,
-              }))}><Play size={16} /> 提交多机位任务</Button>
+              <div className="grid grid-cols-2 gap-3">
+                <Button disabled={busy} className="h-11 w-full gap-2" onClick={() => void runTask(() => createMultiviewJob({
+                  config: multiviewConfig,
+                  limit_sessions: limitSessions,
+                }))}><Play size={16} /> 预处理</Button>
+                <Button disabled={busy} className="h-11 w-full gap-2" onClick={() => void runTask(() => createMultiviewTriangulateJob({
+                  config: multiviewConfig,
+                  calibration: multiviewCalibration || undefined,
+                  limit_sessions: limitSessions,
+                }))}><Play size={16} /> 三角化 3D</Button>
+              </div>
             </div>
           )}
 

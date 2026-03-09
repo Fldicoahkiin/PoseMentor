@@ -218,7 +218,13 @@ uv run python prepare_multiview_dataset.py --config configs/multiview.yaml --lim
 四机位 YOLO2D 提取（和 AIST++ 同一处理方式）：
 
 ```bash
-uv run python extract_pose_yolo11.py --config configs/data.yaml --video-root data/processed/multiview --out-dir data/processed/multiview_pose2d --recursive --weights yolo11m-pose.pt
+uv run python extract_pose_yolo11.py --config configs/data.yaml --video-root data/processed/multiview --out-dir data/processed/multiview/yolo2d --recursive --weights yolo11m-pose.pt
+```
+
+四机位三角化 3D 真值：
+
+```bash
+uv run python triangulate_multiview_dataset.py --config configs/multiview.yaml --calibration configs/calibration/fourview_template.yaml --limit-sessions 20
 ```
 
 四机位可视化报告：

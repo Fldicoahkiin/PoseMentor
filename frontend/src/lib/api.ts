@@ -236,6 +236,15 @@ export async function createMultiviewJob(payload: {
   return data.job_id;
 }
 
+export async function createMultiviewTriangulateJob(payload: {
+  config: string;
+  calibration?: string;
+  limit_sessions: number;
+}) {
+  const { data } = await client.post<{ job_id: string }>("/jobs/multiview/triangulate", payload);
+  return data.job_id;
+}
+
 export async function createEvaluateJob(payload: {
   dataset_id: string;
   input_dir: string;
