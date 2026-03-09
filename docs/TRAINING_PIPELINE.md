@@ -78,6 +78,28 @@ flowchart LR
 
 两种方式输出目录一致：`data/processed/aistpp/yolo2d`
 
+### 4.2.1 AIST++ 多机位预览对齐层
+
+AIST++ 的训练输入是单视角，但前端多机位预览需要额外做一次官方时间轴对齐，不能直接把不同机位原视频按同一个帧号硬拼在一起。
+
+当前预览链路会读取：
+
+- `cameras/mapping.txt`
+- `cameras/setting*.json`
+- `keypoints2d/*.pkl`
+- `keypoints3d/*.pkl`
+
+处理方式：
+
+1. 根据 `mapping.txt` 找到当前动作对应的相机方案
+2. 读取每个机位的 `K / distortion / rotation / translation`
+3. 将官方 3D 关键点重投影回各机位图像平面
+4. 与官方 2D 关键点做时间偏移搜索，得到 `camera_offsets`
+5. 基于 `camera_trim_start` 重新裁切各机位原视频与 2D 轨迹
+6. 输出统一时间轴的 source / 2D / 3D 预览
+
+补充说明见：[`docs/CAMERA_ALIGNMENT.md`](./CAMERA_ALIGNMENT.md)
+
 ### 4.3 模型与损失
 
 实现位置：`train_3d_lift_demo.py`

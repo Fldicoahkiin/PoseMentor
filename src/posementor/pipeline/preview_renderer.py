@@ -489,6 +489,8 @@ def render_pose_preview_videos(
     output_2d: Path,
     output_3d: Path,
     output_source: Path | None = None,
+    source_frame_offset: int = 0,
+    frame_total: int | None = None,
 ) -> dict[str, float]:
     cap = cv2.VideoCapture(str(source_video))
     if not cap.isOpened():
@@ -497,18 +499,28 @@ def render_pose_preview_videos(
     fps = float(cap.get(cv2.CAP_PROP_FPS) or 30.0)
     source_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 960)
     source_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 540)
+    source_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
     target_width, target_height = _fit_preview_size(source_width, source_height)
     scale_x = target_width / max(1, source_width)
     scale_y = target_height / max(1, source_height)
 
-    frame_total = int(min(len(keypoints2d), len(joints3d)))
-    if frame_total <= 0:
+    source_start = max(0, int(source_frame_offset))
+    available_total = min(len(keypoints2d), len(joints3d))
+    if source_frames > 0:
+        available_total = min(available_total, max(0, source_frames - source_start))
+    if frame_total is not None:
+        available_total = min(available_total, max(0, int(frame_total)))
+    if available_total <= 0:
         cap.release()
         raise RuntimeError("视频与关键点帧数不匹配，无法生成预览。")
 
-    joints3d_use = _smooth_sequence(joints3d[:frame_total].astype(np.float32))
+    if source_start > 0:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, source_start)
+
+    keypoints2d_use = keypoints2d[:available_total].astype(np.float32)
+    joints3d_use = _smooth_sequence(joints3d[:available_total].astype(np.float32))
     projected_all = np.stack(
-        [_project_frame(joints3d_use[idx]) for idx in range(frame_total)],
+        [_project_frame(joints3d_use[idx]) for idx in range(available_total)],
         axis=0,
     )
     xy_all = projected_all[:, :, :2]
@@ -525,7 +537,7 @@ def render_pose_preview_videos(
     frames_source: list[np.ndarray] = []
     frames_2d: list[np.ndarray] = []
     frames_3d: list[np.ndarray] = []
-    for frame_idx in range(frame_total):
+    for frame_idx in range(available_total):
         ok, frame = cap.read()
         if not ok:
             break
@@ -538,7 +550,7 @@ def render_pose_preview_videos(
         if output_source is not None:
             frames_source.append(_decorate_source_frame(frame_resized, frame_idx))
 
-        kp = keypoints2d[frame_idx].astype(np.float32).copy()
+        kp = keypoints2d_use[frame_idx].copy()
         kp[:, 0] *= scale_x
         kp[:, 1] *= scale_y
         frame_2d = draw_pose_2d(frame_resized.copy(), kp, conf_thres=0.05)

@@ -62,6 +62,11 @@ posementor/
 
 完整步骤见：[`docs/QUICKSTART.md`](docs/QUICKSTART.md)
 
+关键技术文档：
+- [`docs/TRAINING_PIPELINE.md`](docs/TRAINING_PIPELINE.md)
+- [`docs/CAMERA_ALIGNMENT.md`](docs/CAMERA_ALIGNMENT.md)
+- [`docs/DATASET_CAPTURE_GUIDE.md`](docs/DATASET_CAPTURE_GUIDE.md)
+
 快速路径（推荐）：
 
 ```bash
@@ -106,6 +111,8 @@ uv run python extract_pose_aist2d.py --config configs/data.yaml --camera-index 1
 ```
 
 说明：AIST++ 官方 2D 注释为 9 机位聚合（`cAll`），当前单视角训练链路会为每个样本选取一个机位并输出一个 2D 序列。`--camera-index 1` 固定为 `c01`。
+
+前端多机位预览与同步播放不再直接假设 AIST 原视频天然同帧：当前版本会读取官方 `mapping.txt`、`setting*.json`、`keypoints2d`、`keypoints3d`，为每个机位生成对齐偏移与裁切参数，再输出统一时间轴预览。
 
 可用数据集清单（后端注册表）：
 

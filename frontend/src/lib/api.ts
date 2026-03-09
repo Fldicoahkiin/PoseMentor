@@ -80,9 +80,49 @@ export type SourcePreviewPayload = {
   samples: SourcePreviewItem[];
 };
 
+export type PosePreviewCameraGeometry = {
+  camera_id: string;
+  image_size: number[];
+  focal_length_px: number[];
+  principal_point_px: number[];
+  intrinsic: number[][];
+  distortion: number[];
+  rotation: number[];
+  translation: number[];
+};
+
+export type PosePreviewAlignment = {
+  dataset_id: string;
+  group_seq_id: string;
+  mode: string;
+  setting_name: string;
+  setting_file: string;
+  timeline_fps: number;
+  timeline_frame_count: number;
+  timeline_start_frame: number;
+  frame_total: number;
+  available_cameras: string[];
+  camera_offsets: Record<string, number>;
+  camera_trim_start: Record<string, number>;
+  camera_sync_error_px: Record<string, number>;
+  camera_frame_count: Record<string, number>;
+  camera_geometry: Record<string, PosePreviewCameraGeometry>;
+  camera_id?: string;
+  alignment_data_url?: string;
+  current_camera?: {
+    camera_id: string;
+    offset_frames: number;
+    trim_start: number;
+    frame_count: number;
+    sync_error_px: number;
+    geometry?: PosePreviewCameraGeometry;
+  };
+};
+
 export type PosePreviewPayload = {
   dataset_id: string;
   seq_id: string;
+  camera_id?: string;
   source_video_url: string;
   pose2d_video_url: string;
   pose2d_data_url: string;
@@ -91,6 +131,8 @@ export type PosePreviewPayload = {
   cache_key: string;
   fps: number;
   frames: number;
+  alignment?: PosePreviewAlignment;
+  source_video_fallback_url?: string;
 };
 
 export type ArtifactManifestItem = {

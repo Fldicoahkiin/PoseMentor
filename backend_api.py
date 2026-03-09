@@ -17,6 +17,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from posementor.data.aist_alignment import (
+    collect_group_video_paths,
+    extract_camera_id,
+    load_aist_alignment_meta,
+    load_group_keypoints2d,
+    plan_group_preview,
+    read_video_stats,
+    resolve_group_seq_id,
+)
 from posementor.infra.command_runner import JobRunner
 from posementor.infra.job_store import JobRecord, JobStore
 from posementor.multiview.naming import build_video_rel_path, build_video_seq_id
@@ -36,6 +45,7 @@ STANDARD_REGISTRY_FILE = PROJECT_ROOT / "configs" / "standards.yaml"
 ARTIFACT_ROOT = ensure_dir(PROJECT_ROOT / "artifacts")
 DATA_ROOT = ensure_dir(PROJECT_ROOT / "data")
 OUTPUT_ROOT = ensure_dir(PROJECT_ROOT / "outputs")
+AIST_ANNOTATIONS_ROOT = DATA_ROOT / "raw" / "aistpp" / "annotations" / "aist_plusplus_final"
 
 store = JobStore(root=JOB_ROOT)
 runner = JobRunner(
@@ -126,6 +136,8 @@ PREVIEW_YOLO_CONF = float(os.environ.get("POSEMENTOR_PREVIEW_YOLO_CONF", "0.35")
 
 _preview_pose_model = None
 _preview_pose_model_lock = threading.Lock()
+_preview_group_locks: dict[str, threading.Lock] = {}
+_preview_group_locks_guard = threading.Lock()
 
 
 def _read_dataset_registry() -> dict:
@@ -504,6 +516,246 @@ def _extract_pose2d_from_video(video_path: Path) -> tuple[np.ndarray, float]:
     return np.stack(frames, axis=0), fps
 
 
+def _get_preview_group_lock(group_key: str) -> threading.Lock:
+    with _preview_group_locks_guard:
+        lock = _preview_group_locks.get(group_key)
+        if lock is None:
+            lock = threading.Lock()
+            _preview_group_locks[group_key] = lock
+        return lock
+
+
+
+def _build_preview_cache_key(paths: list[Path]) -> str:
+    existing_times = [path.stat().st_mtime_ns for path in paths if path.exists()]
+    return str(int(max(existing_times, default=0)))
+
+
+
+def _workspace_pose_preview_aist(
+    dataset_id: str,
+    source_video: Path,
+    rel_data_video: Path,
+    dataset_video_root: Path,
+    gt_dir: Path,
+    source_seq_id: str,
+    source_stem: str,
+    refresh: bool,
+) -> dict[str, object] | None:
+    if dataset_id != "aistpp":
+        return None
+    if not AIST_ANNOTATIONS_ROOT.exists():
+        return None
+
+    camera_id = extract_camera_id(source_stem)
+    if not camera_id:
+        return None
+    group_seq_id = resolve_group_seq_id(source_stem)
+    if group_seq_id == source_stem:
+        return None
+
+    gt_seq_id = _resolve_existing_gt_seq_id(
+        gt_dir=gt_dir,
+        candidates=[group_seq_id, source_seq_id, source_stem],
+    )
+    if not gt_seq_id:
+        return None
+    gt_file = gt_dir / f"{gt_seq_id}.npz"
+    if not gt_file.exists():
+        return None
+
+    group_video_paths = collect_group_video_paths(dataset_video_root, group_seq_id)
+    if camera_id not in group_video_paths:
+        return None
+
+    align_cache_dir = ensure_dir(OUTPUT_ROOT / "preview_cache" / dataset_id / "alignment")
+    alignment_file = align_cache_dir / f"{group_seq_id}_alignment.json"
+    keypoints2d_file = AIST_ANNOTATIONS_ROOT / "keypoints2d" / f"{group_seq_id}.pkl"
+    if not keypoints2d_file.exists():
+        return None
+
+    group_lock = _get_preview_group_lock(f"{dataset_id}:{group_seq_id}")
+    with group_lock:
+        alignment_meta = load_aist_alignment_meta(
+            group_seq_id=group_seq_id,
+            annotations_root=str(AIST_ANNOTATIONS_ROOT),
+            cache_dir=str(align_cache_dir),
+            refresh=refresh,
+        )
+        with np.load(gt_file) as gt_data:
+            joints3d = gt_data["joints3d"].astype(np.float32)
+
+        video_stats = {
+            item_camera_id: read_video_stats(item_path)
+            for item_camera_id, item_path in group_video_paths.items()
+        }
+        preview_plan = plan_group_preview(
+            alignment=alignment_meta,
+            video_stats=video_stats,
+            joints3d_frame_total=int(joints3d.shape[0]),
+        )
+        frame_total = int(preview_plan["frame_total"])
+        if frame_total <= 0:
+            raise HTTPException(status_code=400, detail=f"AIST 对齐后无可用帧: {group_seq_id}")
+        timeline_start_frame = int(preview_plan["timeline_start_frame"])
+        camera_trim_start = int(preview_plan["camera_trim_start"][camera_id])
+
+        keypoints2d_all, _timeline_fps = load_group_keypoints2d(
+            group_seq_id,
+            str(AIST_ANNOTATIONS_ROOT),
+        )
+        camera_index = int(camera_id[1:]) - 1
+        keypoints2d = keypoints2d_all[
+            camera_index,
+            camera_trim_start : camera_trim_start + frame_total,
+        ].astype(np.float32)
+        joints3d_view = joints3d[
+            timeline_start_frame : timeline_start_frame + frame_total,
+        ].astype(np.float32)
+        if keypoints2d.shape[0] != frame_total or joints3d_view.shape[0] != frame_total:
+            raise HTTPException(status_code=400, detail=f"AIST 预览裁切失败: {group_seq_id}")
+
+        cache_dir = ensure_dir(OUTPUT_ROOT / "preview_cache" / dataset_id)
+        output_source = cache_dir / f"{source_seq_id}_source.mp4"
+        output_2d = cache_dir / f"{source_seq_id}_pose2d.mp4"
+        output_2d_data = cache_dir / f"{source_seq_id}_pose2d.json"
+        output_3d = cache_dir / f"{group_seq_id}_pose3d.mp4"
+        output_3d_data = cache_dir / f"{group_seq_id}_pose3d.json"
+
+        dep_mtime = max(
+            source_video.stat().st_mtime_ns,
+            gt_file.stat().st_mtime_ns,
+            keypoints2d_file.stat().st_mtime_ns,
+            alignment_file.stat().st_mtime_ns if alignment_file.exists() else 0,
+        )
+        need_render = bool(refresh)
+        for file_path in (output_source, output_2d, output_3d):
+            if not file_path.exists():
+                need_render = True
+                break
+        if not need_render:
+            output_mtime = min(
+                output_source.stat().st_mtime_ns,
+                output_2d.stat().st_mtime_ns,
+                output_3d.stat().st_mtime_ns,
+            )
+            need_render = output_mtime < dep_mtime
+        if not need_render:
+            need_render = not all(
+                _preview_video_cache_valid(file_path)
+                for file_path in (output_source, output_2d, output_3d)
+            )
+
+        stats: dict[str, float] = {
+            "fps": float(video_stats[camera_id]["fps"]),
+            "frames": float(frame_total),
+        }
+        if need_render:
+            stats = render_pose_preview_videos(
+                source_video=source_video,
+                keypoints2d=keypoints2d,
+                joints3d=joints3d_view,
+                output_source=output_source,
+                output_2d=output_2d,
+                output_3d=output_3d,
+                source_frame_offset=camera_trim_start,
+                frame_total=frame_total,
+            )
+
+        source_width = int(video_stats[camera_id]["width"])
+        source_height = int(video_stats[camera_id]["height"])
+        expected_frame_total = frame_total
+
+        need_export_pose2d_data = bool(refresh) or not output_2d_data.exists()
+        if output_2d_data.exists() and not need_export_pose2d_data:
+            need_export_pose2d_data = output_2d_data.stat().st_mtime_ns < dep_mtime
+        if output_2d_data.exists() and not need_export_pose2d_data:
+            try:
+                pose2d_meta = json.loads(output_2d_data.read_text(encoding="utf-8"))
+                need_export_pose2d_data = any(
+                    [
+                        int(pose2d_meta.get("frame_count", -1)) != expected_frame_total,
+                        int(pose2d_meta.get("joint_count", -1)) != int(keypoints2d.shape[1]),
+                        int(pose2d_meta.get("frame_width", -1)) != source_width,
+                        int(pose2d_meta.get("frame_height", -1)) != source_height,
+                    ]
+                )
+            except Exception:
+                need_export_pose2d_data = True
+        if need_export_pose2d_data or need_render:
+            pose2d_data = build_pose2d_preview_data(
+                keypoints2d=keypoints2d,
+                fps=float(stats["fps"]),
+                frame_width=source_width,
+                frame_height=source_height,
+                frame_total=expected_frame_total,
+            )
+            output_2d_data.write_text(
+                json.dumps(pose2d_data, ensure_ascii=False, separators=(",", ":")),
+                encoding="utf-8",
+            )
+
+        need_export_pose3d_data = bool(refresh) or not output_3d_data.exists()
+        if output_3d_data.exists() and not need_export_pose3d_data:
+            need_export_pose3d_data = output_3d_data.stat().st_mtime_ns < dep_mtime
+        if output_3d_data.exists() and not need_export_pose3d_data:
+            try:
+                pose3d_meta = json.loads(output_3d_data.read_text(encoding="utf-8"))
+                need_export_pose3d_data = any(
+                    [
+                        int(pose3d_meta.get("preview_version", 0)) != POSE3D_PREVIEW_VERSION,
+                        int(pose3d_meta.get("frame_count", -1)) != expected_frame_total,
+                        int(pose3d_meta.get("joint_count", -1)) != int(joints3d_view.shape[1]),
+                    ]
+                )
+            except Exception:
+                need_export_pose3d_data = True
+        if need_export_pose3d_data or need_render:
+            pose3d_data = build_pose3d_preview_data(
+                joints3d=joints3d_view,
+                fps=float(stats["fps"]),
+                frame_total=expected_frame_total,
+            )
+            output_3d_data.write_text(
+                json.dumps(pose3d_data, ensure_ascii=False, separators=(",", ":")),
+                encoding="utf-8",
+            )
+
+        alignment_payload = {
+            **preview_plan,
+            "camera_id": camera_id,
+            "alignment_data_url": (
+                f"/outputs-files/preview_cache/{dataset_id}/alignment/{alignment_file.name}"
+            ),
+            "current_camera": {
+                "camera_id": camera_id,
+                "offset_frames": int(preview_plan["camera_offsets"][camera_id]),
+                "trim_start": int(preview_plan["camera_trim_start"][camera_id]),
+                "frame_count": int(preview_plan["camera_frame_count"][camera_id]),
+                "sync_error_px": float(preview_plan["camera_sync_error_px"].get(camera_id, 0.0)),
+                "geometry": preview_plan["camera_geometry"].get(camera_id),
+            },
+        }
+        cache_key = _build_preview_cache_key(
+            [output_source, output_2d, output_2d_data, output_3d, output_3d_data, alignment_file]
+        )
+        return {
+            "dataset_id": dataset_id,
+            "seq_id": group_seq_id,
+            "camera_id": camera_id,
+            "source_video_url": f"/outputs-files/preview_cache/{dataset_id}/{output_source.name}",
+            "pose2d_video_url": f"/outputs-files/preview_cache/{dataset_id}/{output_2d.name}",
+            "pose2d_data_url": f"/outputs-files/preview_cache/{dataset_id}/{output_2d_data.name}",
+            "pose3d_video_url": f"/outputs-files/preview_cache/{dataset_id}/{output_3d.name}",
+            "pose3d_data_url": f"/outputs-files/preview_cache/{dataset_id}/{output_3d_data.name}",
+            "cache_key": cache_key,
+            "fps": stats["fps"],
+            "frames": stats["frames"],
+            "alignment": alignment_payload,
+            "source_video_fallback_url": f"/data-files/{rel_data_video.as_posix()}",
+        }
+
+
 @app.get("/")
 def root() -> dict[str, str]:
     return {
@@ -594,8 +846,10 @@ def source_preview(dataset_id: str = "aistpp", limit: int = 3) -> dict[str, obje
                     rel_data = path.relative_to(DATA_ROOT).as_posix()
                     url = f"/data-files/{rel_data}"
                 seq_id = build_video_seq_id(video_root=video_root, video_path=path)
+                group_seq_id = CAMERA_TOKEN_PATTERN.sub("_cAll_", seq_id)
                 pose2d_file = preview_cache_dir / f"{seq_id}_pose2d.mp4"
-                pose3d_file = preview_cache_dir / f"{seq_id}_pose3d.mp4"
+                pose3d_file = preview_cache_dir / f"{group_seq_id}_pose3d.mp4"
+                official_pose2d_file = AIST_ANNOTATIONS_ROOT / "keypoints2d" / f"{group_seq_id}.pkl"
                 group_rows.append(
                     {
                         "name": path.name,
@@ -605,9 +859,11 @@ def source_preview(dataset_id: str = "aistpp", limit: int = 3) -> dict[str, obje
                         "group_key": group_key,
                         "camera_id": camera_id,
                         "pose2d_exists": pose2d_file.exists()
-                        or (yolo_dir / f"{seq_id}.npz").exists(),
+                        or (yolo_dir / f"{seq_id}.npz").exists()
+                        or (dataset_id == "aistpp" and official_pose2d_file.exists()),
                         "pose3d_exists": pose3d_file.exists()
-                        or (gt_dir / f"{seq_id}.npz").exists(),
+                        or (gt_dir / f"{seq_id}.npz").exists()
+                        or (gt_dir / f"{group_seq_id}.npz").exists(),
                     }
                 )
             group_ready = all(
@@ -651,7 +907,25 @@ def workspace_pose_preview(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="video_path 必须位于 data 目录内") from exc
 
+    source_name = source_video.name
+    source_stem = source_video.stem
+    dataset_video_root = _resolve_dataset_video_root(_normalize_dataset_item(dataset))
+    source_video_rel = build_video_rel_path(video_root=dataset_video_root, video_path=source_video)
+    source_seq_id = build_video_seq_id(video_root=dataset_video_root, video_path=source_video)
+
     yolo_dir, gt_dir = _resolve_pose_dirs_from_dataset(_normalize_dataset_item(dataset))
+    aist_preview_payload = _workspace_pose_preview_aist(
+        dataset_id=dataset_id,
+        source_video=source_video,
+        rel_data_video=rel_data_video,
+        dataset_video_root=dataset_video_root,
+        gt_dir=gt_dir,
+        source_seq_id=source_seq_id,
+        source_stem=source_stem,
+        refresh=refresh,
+    )
+    if aist_preview_payload is not None:
+        return aist_preview_payload
     if not yolo_dir.exists() or not gt_dir.exists():
         detail = (
             "2D/3D 数据目录不存在: "
@@ -662,12 +936,6 @@ def workspace_pose_preview(
             status_code=400,
             detail=detail,
         )
-
-    source_name = source_video.name
-    source_stem = source_video.stem
-    dataset_video_root = _resolve_dataset_video_root(_normalize_dataset_item(dataset))
-    source_video_rel = build_video_rel_path(video_root=dataset_video_root, video_path=source_video)
-    source_seq_id = build_video_seq_id(video_root=dataset_video_root, video_path=source_video)
 
     fallback_seq_id = find_sequence_id(
         yolo2d_dir=yolo_dir,

@@ -29,6 +29,7 @@ import {
   type ArtifactStatus,
   type DatasetItem,
   type JobItem,
+  type PosePreviewAlignment,
   type PosePreviewPayload,
   type SourcePreviewItem,
   type SourcePreviewPayload,
@@ -118,8 +119,7 @@ const POSE3D_CARD_CLASSES_BY_COUNT: Record<number, string> = {
 };
 const TRAIN_PROGRESS_STALL_MS = 20_000;
 const SYNC_DRIFT_TOLERANCE = 0.05;
-const SYNC_HARD_SEEK_TOLERANCE = 0.22;
-const SYNC_TICK_MS = 90;
+const SYNC_TICK_MS = 40;
 const SYNC_PAUSE_SETTLE_MS = 72;
 
 function formatBytes(sizeBytes: number): string {
@@ -154,6 +154,21 @@ function formatClock(totalSeconds: number): string {
       .padStart(2, '0')}`;
   }
   return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+}
+
+function formatDecimal(value: number | undefined | null, digits = 2): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return '-';
+  }
+  return Number(value).toFixed(digits);
+}
+
+function formatFrameOffset(value: number | undefined | null): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return '-';
+  }
+  const numberValue = Math.trunc(value);
+  return `${numberValue > 0 ? '+' : ''}${numberValue}f`;
 }
 
 function toStepStatus(jobStatus: string | undefined): StepStatus {
@@ -247,9 +262,6 @@ function pickMedian(values: number[], fallback = 0): number {
   return (left + right) / 2;
 }
 
-function clampRate(rate: number): number {
-  return Math.max(0.5, Math.min(2, rate));
-}
 
 export default function DemoPage() {
   const [loading, setLoading] = useState(false);
@@ -807,6 +819,8 @@ export default function DemoPage() {
             pose2dDataUrl: '',
             seqId: '',
             cameraLabel: `视角 ${index + 1}`,
+            alignment: null,
+            currentCamera: null,
           };
         }
         const payload = posePreviewMap[sample.path];
@@ -822,10 +836,22 @@ export default function DemoPage() {
           pose2dDataUrl: payload?.pose2d_data_url ? toMediaUrl(payload.pose2d_data_url, payload.cache_key) : '',
           seqId: payload?.seq_id ?? '',
           cameraLabel: parseCameraLabel(sample),
+          alignment: payload?.alignment ?? null,
+          currentCamera: payload?.alignment?.current_camera ?? null,
         };
       }),
     [currentGroupSamples, posePreviewMap],
   );
+
+  const currentAlignment = useMemo<PosePreviewAlignment | null>(() => {
+    for (const sample of currentGroupSamples) {
+      const alignment = posePreviewMap[sample.path]?.alignment;
+      if (alignment) {
+        return alignment;
+      }
+    }
+    return null;
+  }, [currentGroupSamples, posePreviewMap]);
 
   const syncPose3dDataUrl = useMemo(() => {
     for (const sample of currentGroupSamples) {
@@ -893,12 +919,22 @@ export default function DemoPage() {
     return nodes;
   }, [currentGroupSamples]);
 
+  const getFollowerVideos = useCallback(() => {
+    const master = getMasterSourceVideo();
+    return getSyncVideos().filter((node) => node !== master);
+  }, [getMasterSourceVideo, getSyncVideos]);
+
   const getSyncTimes = useCallback(() => {
+    const master = getMasterSourceVideo();
+    const masterTime = master?.currentTime;
+    if (Number.isFinite(masterTime) && masterTime !== undefined) {
+      return [masterTime];
+    }
     return getSyncVideos()
       .filter((node) => node.readyState >= 2)
       .map((node) => node.currentTime)
       .filter((value) => Number.isFinite(value) && value >= 0);
-  }, [getSyncVideos]);
+  }, [getMasterSourceVideo, getSyncVideos]);
 
   const clearSyncTicker = useCallback(() => {
     if (syncTickerRef.current !== null) {
@@ -940,24 +976,29 @@ export default function DemoPage() {
   }, []);
 
   const syncSeekAll = useCallback((timeSeconds: number) => {
+    const normalizedTime = Math.max(0, timeSeconds);
     getSyncVideos().forEach((element) => {
-      if (Math.abs(element.currentTime - timeSeconds) > 0.01) {
-        seekVideo(element, timeSeconds);
+      if (Math.abs(element.currentTime - normalizedTime) > 0.008) {
+        seekVideo(element, normalizedTime);
       }
       if (Math.abs(element.playbackRate - syncPlaybackRate) > 0.001) {
         element.playbackRate = syncPlaybackRate;
       }
     });
-    updateSyncCurrentTime(timeSeconds, true);
+    updateSyncCurrentTime(normalizedTime, true);
   }, [getSyncVideos, syncPlaybackRate, updateSyncCurrentTime]);
 
   const syncSetRateAll = useCallback(
     (rate: number) => {
-      getSyncVideos().forEach((element) => {
+      const master = getMasterSourceVideo();
+      if (master) {
+        master.playbackRate = rate;
+      }
+      getFollowerVideos().forEach((element) => {
         element.playbackRate = rate;
       });
     },
-    [getSyncVideos],
+    [getFollowerVideos, getMasterSourceVideo],
   );
 
   const syncFromMaster = useCallback(
@@ -967,29 +1008,19 @@ export default function DemoPage() {
         return;
       }
       const sourceTime = master.currentTime;
-      const softTolerance = force ? 0.018 : SYNC_DRIFT_TOLERANCE;
-      getSyncVideos().forEach((element) => {
-        if (element === master || element.readyState < 2) {
+      const tolerance = force ? 0.008 : SYNC_DRIFT_TOLERANCE;
+      getFollowerVideos().forEach((element) => {
+        if (element.readyState < 2) {
           return;
         }
-        const drift = sourceTime - element.currentTime;
-        const absDrift = Math.abs(drift);
-        if (absDrift > (force ? 0.03 : SYNC_HARD_SEEK_TOLERANCE)) {
-          seekVideo(element, sourceTime);
-          if (Math.abs(element.playbackRate - syncPlaybackRate) > 0.001) {
-            element.playbackRate = syncPlaybackRate;
-          }
-        } else if (absDrift > softTolerance) {
-          const adjust = drift > 0 ? 0.08 : -0.08;
-          const targetRate = clampRate(syncPlaybackRate + adjust);
-          if (Math.abs(element.playbackRate - targetRate) > 0.001) {
-            element.playbackRate = targetRate;
-          }
-        } else if (Math.abs(element.playbackRate - syncPlaybackRate) > 0.001) {
-          element.playbackRate = syncPlaybackRate;
+        if (!element.paused) {
+          element.pause();
         }
-        if (syncPlayingRef.current && element.paused) {
-          void element.play().catch(() => undefined);
+        if (Math.abs(element.currentTime - sourceTime) > tolerance) {
+          seekVideo(element, sourceTime);
+        }
+        if (Math.abs(element.playbackRate - syncPlaybackRate) > 0.001) {
+          element.playbackRate = syncPlaybackRate;
         }
       });
       if (Math.abs(master.playbackRate - syncPlaybackRate) > 0.001) {
@@ -997,7 +1028,7 @@ export default function DemoPage() {
       }
       updateSyncCurrentTime(sourceTime, force);
     },
-    [getMasterSourceVideo, getSyncVideos, syncPlaybackRate, updateSyncCurrentTime],
+    [getFollowerVideos, getMasterSourceVideo, syncPlaybackRate, updateSyncCurrentTime],
   );
 
   const handleSyncLoadedMetadata = useCallback(
@@ -1007,12 +1038,12 @@ export default function DemoPage() {
       if (anchorTime > 0.01 && Math.abs(video.currentTime - anchorTime) > 0.02) {
         seekVideo(video, anchorTime);
       }
-      if (syncPlayingRef.current && video.paused && !syncPauseGuardRef.current) {
-        void video.play().catch(() => undefined);
+      if (video !== getMasterSourceVideo() && !video.paused) {
+        video.pause();
       }
       recomputeSyncDuration();
     },
-    [recomputeSyncDuration, syncPlaybackRate],
+    [getMasterSourceVideo, recomputeSyncDuration, syncPlaybackRate],
   );
 
   const handleVideoLoadedData = useCallback((video: HTMLVideoElement) => {
@@ -1060,18 +1091,15 @@ export default function DemoPage() {
     syncSetRateAll(syncPlaybackRate);
     await Promise.all(videos.map((element) => waitForVideoPlayable(element)));
 
+    getFollowerVideos().forEach((element) => {
+      element.pause();
+      if (Math.abs(element.currentTime - anchorTime) > 0.008) {
+        seekVideo(element, anchorTime);
+      }
+    });
+
     try {
-      await Promise.all(
-        videos.map(async (element) => {
-          try {
-            await element.play();
-          } catch (error) {
-            if (element === master) {
-              throw error;
-            }
-          }
-        }),
-      );
+      await master.play();
     } catch (err) {
       console.warn(err);
       syncPlayingRef.current = false;
@@ -1090,6 +1118,7 @@ export default function DemoPage() {
     getMasterSourceVideo,
     getSyncTimes,
     getSyncVideos,
+    getFollowerVideos,
     syncFromMaster,
     syncPlaybackRate,
     syncSeekAll,
@@ -1923,12 +1952,64 @@ export default function DemoPage() {
               />
             </div>
 
+            {currentAlignment && (
+              <div className="mb-4 rounded-xl border border-zinc-200 bg-stone-50 px-4 py-3">
+                <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-600">
+                  <span className="rounded-md border border-zinc-200 bg-white px-2 py-1">
+                    对齐模式：{currentAlignment.mode === 'aist_official_projection' ? 'AIST 官方时间轴' : currentAlignment.mode}
+                  </span>
+                  <span className="rounded-md border border-zinc-200 bg-white px-2 py-1">
+                    相机方案：{currentAlignment.setting_name}
+                  </span>
+                  <span className="rounded-md border border-zinc-200 bg-white px-2 py-1">
+                    公共时间轴：{formatDecimal(currentAlignment.timeline_fps, 3)} FPS · 起点 {currentAlignment.timeline_start_frame} · {currentAlignment.frame_total} 帧
+                  </span>
+                  <span className="rounded-md border border-zinc-200 bg-white px-2 py-1">
+                    参数文件：{currentAlignment.setting_file.split('/').at(-1) || currentAlignment.setting_file}
+                  </span>
+                </div>
+                <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5">
+                  {currentAlignment.available_cameras.map((cameraId) => {
+                    const geometry = currentAlignment.camera_geometry[cameraId];
+                    return (
+                      <div key={cameraId} className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-600 shadow-sm">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-semibold text-zinc-900">{cameraId}</span>
+                          <span className="rounded-md border border-zinc-200 bg-stone-50 px-1.5 py-0.5 text-[11px] text-zinc-600">
+                            offset {formatFrameOffset(currentAlignment.camera_offsets[cameraId])}
+                          </span>
+                        </div>
+                        <div className="mt-2 space-y-1">
+                          <div>trim {currentAlignment.camera_trim_start[cameraId]} · 误差 {formatDecimal(currentAlignment.camera_sync_error_px[cameraId], 1)} px</div>
+                          <div>画幅 {geometry?.image_size?.[0] ?? '-'} × {geometry?.image_size?.[1] ?? '-'}</div>
+                          <div>fx/fy {formatDecimal(geometry?.focal_length_px?.[0], 1)} / {formatDecimal(geometry?.focal_length_px?.[1], 1)}</div>
+                          <div>cx/cy {formatDecimal(geometry?.principal_point_px?.[0], 1)} / {formatDecimal(geometry?.principal_point_px?.[1], 1)}</div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             <div className={syncGridClasses}>
               {viewSlots.map((slot, index) => (
                 <div key={`source-${slot.sample?.path || `empty-${slot.cameraLabel}`}`} className={`self-start rounded-xl border border-zinc-200 bg-stone-50 p-3 ${sourceColumnClasses[index] ?? ''}`}>
-                  <h3 className="mb-2 text-sm font-bold text-zinc-800">
-                    素材 {index + 1} · {slot.cameraLabel}
-                  </h3>
+                  <div className="mb-2 flex flex-wrap items-center gap-2">
+                    <h3 className="text-sm font-bold text-zinc-800">
+                      素材 {index + 1} · {slot.cameraLabel}
+                    </h3>
+                    {slot.currentCamera && (
+                      <>
+                        <span className="rounded-md border border-zinc-200 bg-white px-1.5 py-0.5 text-[11px] text-zinc-600">
+                          offset {formatFrameOffset(slot.currentCamera.offset_frames)}
+                        </span>
+                        <span className="rounded-md border border-zinc-200 bg-white px-1.5 py-0.5 text-[11px] text-zinc-600">
+                          trim {slot.currentCamera.trim_start}
+                        </span>
+                      </>
+                    )}
+                  </div>
                   {slot.sourceVideoUrl ? (
                     <video
                       key={`source-video-${slot.sourceVideoUrl || slot.sample?.path || index}`}
@@ -1980,9 +2061,16 @@ export default function DemoPage() {
 
               {viewSlots.map((slot, index) => (
                 <div key={`pose2d-${slot.sample?.path || `empty-${slot.cameraLabel}`}`} className={`self-start rounded-xl border border-zinc-200 bg-stone-50 p-3 ${pose2dColumnClasses[index] ?? ''}`}>
-                  <h3 className="mb-2 text-sm font-bold text-zinc-800">
-                    2D骨架 {index + 1} · {slot.cameraLabel}
-                  </h3>
+                  <div className="mb-2 flex flex-wrap items-center gap-2">
+                    <h3 className="text-sm font-bold text-zinc-800">
+                      2D骨架 {index + 1} · {slot.cameraLabel}
+                    </h3>
+                    {slot.currentCamera && (
+                      <span className="rounded-md border border-zinc-200 bg-white px-1.5 py-0.5 text-[11px] text-zinc-600">
+                        误差 {formatDecimal(slot.currentCamera.sync_error_px, 1)} px
+                      </span>
+                    )}
+                  </div>
                   {slot.pose2dVideoUrl ? (
                     <video
                       key={`pose2d-video-${slot.pose2dVideoUrl || slot.sample?.path || index}`}
