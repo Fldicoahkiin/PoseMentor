@@ -12,10 +12,10 @@ from typing import Any
 
 import cv2
 import numpy as np
-from fastapi import FastAPI, HTTPException
+from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from posementor.data.aist_alignment import (
     collect_group_video_paths,
@@ -56,16 +56,50 @@ runner = JobRunner(
 )
 
 app = FastAPI(title="PoseMentor Backend", version="0.1.0")
+
+# CORS: 从环境变量读取允许的 origins，避免通配符 + credentials 的危险组合
+_cors_origins_raw = os.environ.get(
+    "POSEMENTOR_CORS_ORIGINS",
+    "http://localhost:7860,http://localhost:5173,http://127.0.0.1:7860,http://127.0.0.1:5173",
+)
+_cors_origins = [o.strip() for o in _cors_origins_raw.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 注意: StaticFiles 会暴露整个目录，生产环境应限制访问范围或添加鉴权
 app.mount("/artifacts-files", StaticFiles(directory=ARTIFACT_ROOT), name="artifacts-files")
 app.mount("/data-files", StaticFiles(directory=DATA_ROOT), name="data-files")
 app.mount("/outputs-files", StaticFiles(directory=OUTPUT_ROOT), name="outputs-files")
+
+# 业务路由统一定义在 router 上，挂载到 / 和 /api 两个前缀，消除重复注册
+router = APIRouter()
+
+DATASET_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{2,64}$")
+
+_SAFE_PATH_PATTERN = re.compile(r"^[a-zA-Z0-9_/.\-]+$")
+_SAFE_EXT_PATTERN = re.compile(r"^[a-z0-9]{1,6}$")
+
+
+def _validate_safe_path(value: str, field_name: str) -> str:
+    """校验路径字段：不以 '-' 开头、不含 '..'、仅允许安全字符。"""
+    if value.startswith("-"):
+        raise ValueError(f"{field_name} 不得以 '-' 开头")
+    if ".." in value:
+        raise ValueError(f"{field_name} 不得包含 '..'")
+    if not _SAFE_PATH_PATTERN.match(value):
+        raise ValueError(f"{field_name} 包含非法字符")
+    return value
+
+
+def _validate_optional_safe_path(value: str | None, field_name: str) -> str | None:
+    if value is None:
+        return None
+    return _validate_safe_path(value, field_name)
 
 
 class DataPrepareRequest(BaseModel):
@@ -77,6 +111,18 @@ class DataPrepareRequest(BaseModel):
     video_limit: int = 120
     agree_license: bool = False
     preprocess_limit: int = 0
+
+    @field_validator("dataset_id")
+    @classmethod
+    def check_dataset_id(cls, v: str) -> str:
+        if not DATASET_ID_PATTERN.match(v):
+            raise ValueError("dataset_id 格式非法")
+        return v
+
+    @field_validator("config")
+    @classmethod
+    def check_config(cls, v: str) -> str:
+        return _validate_safe_path(v, "config")
 
 
 class ExtractRequest(BaseModel):
@@ -90,6 +136,40 @@ class ExtractRequest(BaseModel):
     conf: float = 0.35
     max_videos: int = 0
 
+    @field_validator("dataset_id")
+    @classmethod
+    def check_dataset_id(cls, v: str) -> str:
+        if not DATASET_ID_PATTERN.match(v):
+            raise ValueError("dataset_id 格式非法")
+        return v
+
+    @field_validator("config")
+    @classmethod
+    def check_config(cls, v: str) -> str:
+        return _validate_safe_path(v, "config")
+
+    @field_validator("input_dir")
+    @classmethod
+    def check_input_dir(cls, v: str | None) -> str | None:
+        return _validate_optional_safe_path(v, "input_dir")
+
+    @field_validator("out_dir")
+    @classmethod
+    def check_out_dir(cls, v: str | None) -> str | None:
+        return _validate_optional_safe_path(v, "out_dir")
+
+    @field_validator("video_ext")
+    @classmethod
+    def check_video_ext(cls, v: str) -> str:
+        if not _SAFE_EXT_PATTERN.match(v):
+            raise ValueError("video_ext 格式非法，仅允许 1-6 位小写字母数字")
+        return v
+
+    @field_validator("weights")
+    @classmethod
+    def check_weights(cls, v: str) -> str:
+        return _validate_safe_path(v, "weights")
+
 
 class TrainRequest(BaseModel):
     dataset_id: str = "aistpp"
@@ -99,16 +179,48 @@ class TrainRequest(BaseModel):
     artifact_dir: str | None = None
     export_onnx: bool = False
 
+    @field_validator("dataset_id")
+    @classmethod
+    def check_dataset_id(cls, v: str) -> str:
+        if not DATASET_ID_PATTERN.match(v):
+            raise ValueError("dataset_id 格式非法")
+        return v
+
+    @field_validator("config")
+    @classmethod
+    def check_config(cls, v: str) -> str:
+        return _validate_safe_path(v, "config")
+
+    @field_validator("yolo2d_dir", "gt3d_dir", "artifact_dir")
+    @classmethod
+    def check_optional_dirs(cls, v: str | None) -> str | None:
+        return _validate_optional_safe_path(v, "dir")
+
 
 class MultiViewRequest(BaseModel):
     config: str = "configs/multiview.yaml"
     limit_sessions: int = 0
+
+    @field_validator("config")
+    @classmethod
+    def check_config(cls, v: str) -> str:
+        return _validate_safe_path(v, "config")
 
 
 class MultiViewTriangulateRequest(BaseModel):
     config: str = "configs/multiview.yaml"
     calibration: str | None = None
     limit_sessions: int = 0
+
+    @field_validator("config")
+    @classmethod
+    def check_config(cls, v: str) -> str:
+        return _validate_safe_path(v, "config")
+
+    @field_validator("calibration")
+    @classmethod
+    def check_calibration(cls, v: str | None) -> str | None:
+        return _validate_optional_safe_path(v, "calibration")
 
 
 class EvaluateRequest(BaseModel):
@@ -117,6 +229,25 @@ class EvaluateRequest(BaseModel):
     style: str = "gBR"
     max_videos: int = 10
     output_csv: str = "outputs/eval/summary.csv"
+
+    @field_validator("dataset_id")
+    @classmethod
+    def check_dataset_id(cls, v: str) -> str:
+        if not DATASET_ID_PATTERN.match(v):
+            raise ValueError("dataset_id 格式非法")
+        return v
+
+    @field_validator("input_dir", "output_csv")
+    @classmethod
+    def check_paths(cls, v: str) -> str:
+        return _validate_safe_path(v, "path")
+
+    @field_validator("style")
+    @classmethod
+    def check_style(cls, v: str) -> str:
+        if not re.match(r"^[a-zA-Z0-9_-]{1,32}$", v):
+            raise ValueError("style 格式非法")
+        return v
 
 
 class DatasetUpsertRequest(BaseModel):
@@ -130,7 +261,6 @@ class DatasetUpsertRequest(BaseModel):
     notes: str = ""
 
 
-DATASET_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{2,64}$")
 CAMERA_TOKEN_PATTERN = re.compile(r"_c\d+_")
 PREVIEW_YOLO_WEIGHTS = os.environ.get("POSEMENTOR_PREVIEW_YOLO_WEIGHTS", "yolo11m-pose.pt")
 PREVIEW_YOLO_CONF = float(os.environ.get("POSEMENTOR_PREVIEW_YOLO_CONF", "0.35"))
@@ -255,10 +385,16 @@ def _dataset_registry_payload() -> dict[str, list[dict[str, Any]]]:
 
 
 def _assert_dataset_exists(dataset_id: str) -> None:
-    registry = _dataset_registry_payload()
-    ids = {str(item.get("id")) for item in registry["datasets"] if isinstance(item, dict)}
-    if dataset_id not in ids:
+    if _find_dataset(dataset_id) is None:
         raise HTTPException(status_code=400, detail=f"未知 dataset_id: {dataset_id}")
+
+
+def _get_dataset_or_404(dataset_id: str) -> dict:
+    """查找 dataset 并返回，不存在则抛出 400。合并了 _assert + _find 两步操作。"""
+    dataset = _find_dataset(dataset_id)
+    if not isinstance(dataset, dict):
+        raise HTTPException(status_code=400, detail=f"未知 dataset_id: {dataset_id}")
+    return dataset
 
 
 def _assert_aist_dataset(dataset_id: str) -> None:
@@ -273,11 +409,10 @@ def _assert_aist_dataset(dataset_id: str) -> None:
 
 
 def _job_to_dict(job: JobRecord) -> dict[str, object]:
-    status = "succeeded" if job.status == "success" else job.status
     return {
         "job_id": job.job_id,
         "name": job.name,
-        "status": status,
+        "status": job.status,
         "command": job.command,
         "created_at": job.created_at,
         "started_at": job.started_at,
@@ -298,7 +433,7 @@ def _read_job_log_text(path: Path, max_chars: int = 200_000) -> str:
 
 
 def _parse_job_progress(job: JobRecord, log_text: str) -> dict[str, object]:
-    status = "succeeded" if job.status == "success" else job.status
+    status = job.status
     phase = "generic"
     if "train_3d_lift" in job.name:
         phase = "train"
@@ -780,14 +915,8 @@ def root() -> dict[str, str]:
     }
 
 
-@app.get("/health")
+@router.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok"}
-
-
-@app.get("/api/health")
-def health_compat() -> dict[str, str]:
-    # 兼容代理层将后端挂在 /api 前缀时的健康检查路径。
     return {"status": "ok"}
 
 
@@ -802,35 +931,29 @@ def api_root() -> dict[str, str]:
     }
 
 
-@app.get("/jobs")
+@router.get("/jobs")
 def list_jobs() -> dict[str, list[dict[str, object]]]:
     return {"jobs": [_job_to_dict(job) for job in store.list_jobs()]}
 
 
-@app.get("/datasets")
-@app.get("/api/datasets")
+@router.get("/datasets")
 def list_datasets() -> dict:
     return _dataset_registry_payload()
 
 
-@app.get("/standards")
-@app.get("/api/standards")
+@router.get("/standards")
 def list_standards() -> dict:
     return _read_standard_registry()
 
 
-@app.get("/workspace/source-preview")
-@app.get("/api/workspace/source-preview")
+@router.get("/workspace/source-preview")
 def source_preview(dataset_id: str = "aistpp", limit: int = 3) -> dict[str, object]:
-    _assert_dataset_exists(dataset_id)
+    dataset = _get_dataset_or_404(dataset_id)
     bounded_limit = max(1, min(limit, 500))
-
-    dataset = _find_dataset(dataset_id)
-    if not isinstance(dataset, dict):
-        raise HTTPException(status_code=404, detail=f"dataset_id={dataset_id} 未注册")
-    video_root = _resolve_dataset_video_root(_normalize_dataset_item(dataset))
+    normalized = _normalize_dataset_item(dataset)
+    video_root = _resolve_dataset_video_root(normalized)
     preview_cache_dir = OUTPUT_ROOT / "preview_cache" / dataset_id
-    yolo_dir, gt_dir = _resolve_pose_dirs_from_dataset(_normalize_dataset_item(dataset))
+    yolo_dir, gt_dir = _resolve_pose_dirs_from_dataset(normalized)
 
     samples: list[dict[str, object]] = []
     if video_root.exists():
@@ -897,37 +1020,35 @@ def source_preview(dataset_id: str = "aistpp", limit: int = 3) -> dict[str, obje
     }
 
 
-@app.get("/workspace/pose-preview")
-@app.get("/api/workspace/pose-preview")
+@router.get("/workspace/pose-preview")
 def workspace_pose_preview(
     dataset_id: str,
     video_path: str,
     refresh: bool = False,
 ) -> dict[str, object]:
-    _assert_dataset_exists(dataset_id)
-    dataset = _find_dataset(dataset_id)
-    if not isinstance(dataset, dict):
-        raise HTTPException(status_code=404, detail=f"dataset_id={dataset_id} 未注册")
+    dataset = _get_dataset_or_404(dataset_id)
+    normalized = _normalize_dataset_item(dataset)
 
+    # 路径安全校验: 先检查路径组件再 resolve，防止 path traversal 和 symlink 逃逸
+    video_path_obj = Path(video_path)
+    if ".." in video_path_obj.parts or any(p.startswith("-") for p in video_path_obj.parts):
+        raise HTTPException(status_code=400, detail="无效的 video_path")
     source_video = (PROJECT_ROOT / video_path).resolve()
-    if not source_video.exists() or not source_video.is_file():
-        raise HTTPException(status_code=404, detail=f"视频不存在: {video_path}")
-    try:
-        source_video.relative_to(PROJECT_ROOT)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="video_path 必须位于项目目录内") from exc
+    # 先做安全边界检查再暴露文件是否存在，避免 oracle
     try:
         rel_data_video = source_video.relative_to(DATA_ROOT)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail="video_path 必须位于 data 目录内") from exc
+        raise HTTPException(status_code=400, detail="无效的 video_path") from exc
+    if not source_video.exists() or not source_video.is_file():
+        raise HTTPException(status_code=404, detail="无效的 video_path")
 
     source_name = source_video.name
     source_stem = source_video.stem
-    dataset_video_root = _resolve_dataset_video_root(_normalize_dataset_item(dataset))
+    dataset_video_root = _resolve_dataset_video_root(normalized)
     source_video_rel = build_video_rel_path(video_root=dataset_video_root, video_path=source_video)
     source_seq_id = build_video_seq_id(video_root=dataset_video_root, video_path=source_video)
 
-    yolo_dir, gt_dir = _resolve_pose_dirs_from_dataset(_normalize_dataset_item(dataset))
+    yolo_dir, gt_dir = _resolve_pose_dirs_from_dataset(normalized)
     aist_preview_payload = _workspace_pose_preview_aist(
         dataset_id=dataset_id,
         source_video=source_video,
@@ -1156,8 +1277,7 @@ def workspace_pose_preview(
     }
 
 
-@app.post("/datasets/upsert")
-@app.post("/api/datasets/upsert")
+@router.post("/datasets/upsert")
 def upsert_dataset(req: DatasetUpsertRequest) -> dict[str, object]:
     normalized = _normalize_dataset_item(req.model_dump())
     if not DATASET_ID_PATTERN.fullmatch(normalized["id"]):
@@ -1186,8 +1306,7 @@ def upsert_dataset(req: DatasetUpsertRequest) -> dict[str, object]:
     return {"ok": True, "dataset": _enrich_dataset_item(normalized)}
 
 
-@app.get("/artifacts/status")
-@app.get("/api/artifacts/status")
+@router.get("/artifacts/status")
 def artifact_status() -> dict[str, object]:
     curves_file = ARTIFACT_ROOT / "visualizations" / "training_curves.html"
     sample2d_file = ARTIFACT_ROOT / "visualizations" / "samples" / "sample_2d_latest.png"
@@ -1222,8 +1341,7 @@ def artifact_status() -> dict[str, object]:
     }
 
 
-@app.get("/artifacts/manifest")
-@app.get("/api/artifacts/manifest")
+@router.get("/artifacts/manifest")
 def artifact_manifest(limit: int = 200) -> dict[str, object]:
     bounded_limit = max(1, min(limit, 1000))
     files = [path for path in ARTIFACT_ROOT.rglob("*") if path.is_file()]
@@ -1255,7 +1373,7 @@ def artifact_manifest(limit: int = 200) -> dict[str, object]:
     }
 
 
-@app.get("/jobs/{job_id}")
+@router.get("/jobs/{job_id}")
 def get_job(job_id: str) -> dict[str, object]:
     try:
         job = store.get(job_id)
@@ -1264,7 +1382,7 @@ def get_job(job_id: str) -> dict[str, object]:
     return _job_to_dict(job)
 
 
-@app.get("/jobs/{job_id}/log")
+@router.get("/jobs/{job_id}/log")
 def get_job_log(job_id: str, max_chars: int = 8000) -> dict[str, str]:
     try:
         job = store.get(job_id)
@@ -1281,8 +1399,7 @@ def get_job_log(job_id: str, max_chars: int = 8000) -> dict[str, str]:
     return {"log": text}
 
 
-@app.get("/jobs/{job_id}/progress")
-@app.get("/api/jobs/{job_id}/progress")
+@router.get("/jobs/{job_id}/progress")
 def get_job_progress(job_id: str) -> dict[str, object]:
     try:
         job = store.get(job_id)
@@ -1294,7 +1411,7 @@ def get_job_progress(job_id: str) -> dict[str, object]:
     return _parse_job_progress(job=job, log_text=log_text)
 
 
-@app.post("/jobs/data/prepare")
+@router.post("/jobs/data/prepare")
 def start_data_prepare(req: DataPrepareRequest) -> dict[str, str]:
     _assert_dataset_exists(req.dataset_id)
     _assert_aist_dataset(req.dataset_id)
@@ -1326,7 +1443,7 @@ def start_data_prepare(req: DataPrepareRequest) -> dict[str, str]:
     return {"job_id": job_id}
 
 
-@app.post("/jobs/pose/extract")
+@router.post("/jobs/pose/extract")
 def start_pose_extract(req: ExtractRequest) -> dict[str, str]:
     _assert_dataset_exists(req.dataset_id)
 
@@ -1357,7 +1474,7 @@ def start_pose_extract(req: ExtractRequest) -> dict[str, str]:
     return {"job_id": job_id}
 
 
-@app.post("/jobs/train")
+@router.post("/jobs/train")
 def start_train(req: TrainRequest) -> dict[str, str]:
     _assert_dataset_exists(req.dataset_id)
 
@@ -1382,7 +1499,7 @@ def start_train(req: TrainRequest) -> dict[str, str]:
     return {"job_id": job_id}
 
 
-@app.post("/jobs/multiview/prepare")
+@router.post("/jobs/multiview/prepare")
 def start_multiview_prepare(req: MultiViewRequest) -> dict[str, str]:
     command = [
         "uv",
@@ -1399,7 +1516,7 @@ def start_multiview_prepare(req: MultiViewRequest) -> dict[str, str]:
     return {"job_id": job_id}
 
 
-@app.post("/jobs/multiview/triangulate")
+@router.post("/jobs/multiview/triangulate")
 def start_multiview_triangulate(req: MultiViewTriangulateRequest) -> dict[str, str]:
     command = [
         "uv",
@@ -1418,7 +1535,7 @@ def start_multiview_triangulate(req: MultiViewTriangulateRequest) -> dict[str, s
     return {"job_id": job_id}
 
 
-@app.post("/jobs/evaluate")
+@router.post("/jobs/evaluate")
 def start_evaluate(req: EvaluateRequest) -> dict[str, str]:
     _assert_dataset_exists(req.dataset_id)
 
@@ -1439,6 +1556,11 @@ def start_evaluate(req: EvaluateRequest) -> dict[str, str]:
 
     job_id = runner.submit(name=f"evaluate_model_{req.dataset_id}", command=command)
     return {"job_id": job_id}
+
+
+# 将业务路由挂载到 / 和 /api 两个前缀，兼容前端直连和代理层转发
+app.include_router(router)
+app.include_router(router, prefix="/api")
 
 
 if __name__ == "__main__":

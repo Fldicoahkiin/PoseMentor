@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import time
 import uuid
@@ -10,7 +11,9 @@ from typing import Literal
 
 from posementor.utils.io import ensure_dir
 
-JobStatus = Literal["queued", "running", "success", "failed"]
+logger = logging.getLogger(__name__)
+
+JobStatus = Literal["queued", "running", "succeeded", "failed"]
 
 
 @dataclass(slots=True)
@@ -43,15 +46,25 @@ class JobStore:
             return
         try:
             data = json.loads(self.state_file.read_text(encoding="utf-8"))
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("加载作业状态失败 (%s): %s", self.state_file, exc)
             return
 
+        migrated = False
         for item in data:
             try:
+                # 迁移旧版 "success" -> "succeeded"
+                if item.get("status") == "success":
+                    item["status"] = "succeeded"
+                    migrated = True
                 record = JobRecord(**item)
                 self._jobs[record.job_id] = record
-            except Exception:
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("跳过损坏的作业记录: %s", exc)
                 continue
+
+        if migrated:
+            self._save()
 
     def _save(self) -> None:
         payload = [asdict(job) for job in sorted(self._jobs.values(), key=lambda x: x.created_at)]

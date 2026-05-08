@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import queue
 import subprocess
@@ -9,17 +10,29 @@ from pathlib import Path
 
 from posementor.infra.job_store import JobStore
 
+logger = logging.getLogger(__name__)
+
+# 默认作业超时 2 小时，可通过环境变量覆盖
+_DEFAULT_JOB_TIMEOUT = int(os.environ.get("POSEMENTOR_JOB_TIMEOUT", "7200"))
+
 
 class JobRunner:
     """后台任务执行器：串行触发、异步运行、日志落盘。"""
 
-    def __init__(self, store: JobStore, cwd: Path, max_workers: int = 1) -> None:
+    def __init__(
+        self,
+        store: JobStore,
+        cwd: Path,
+        max_workers: int = 1,
+        job_timeout: int = _DEFAULT_JOB_TIMEOUT,
+    ) -> None:
         self.store = store
         self.cwd = cwd
         self.max_workers = max(1, int(max_workers))
+        self.job_timeout = max(60, int(job_timeout))
         interrupted = self.store.mark_interrupted_jobs()
         if interrupted > 0:
-            print(f"[INFO] 已标记 {interrupted} 个历史运行中任务为中断状态")
+            logger.info("已标记 %d 个历史运行中任务为中断状态", interrupted)
         self._queue: queue.Queue[tuple[str, list[str], dict[str, str]]] = queue.Queue()
         self._workers: list[threading.Thread] = []
         for idx in range(self.max_workers):
@@ -82,11 +95,26 @@ class JobRunner:
                     log_file.write(line)
                     log_file.flush()
 
-            process.wait()
+            try:
+                process.wait(timeout=self.job_timeout)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=10)
+                timeout_msg = f"作业超时（{self.job_timeout}s），已强制终止"
+                log_file.write(f"\n[ERROR] {timeout_msg}\n")
+                self.store.update(
+                    job_id,
+                    status="failed",
+                    finished_at=time.time(),
+                    return_code=-9,
+                    error_message=timeout_msg,
+                )
+                return
+
             if process.returncode == 0:
                 self.store.update(
                     job_id,
-                    status="success",
+                    status="succeeded",
                     finished_at=time.time(),
                     return_code=int(process.returncode),
                 )

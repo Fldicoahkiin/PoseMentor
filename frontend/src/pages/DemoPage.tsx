@@ -322,26 +322,20 @@ export default function DemoPage() {
   }, [refreshCore]);
 
   useEffect(() => {
-    if (datasets.length === 0) {
-      setSelectedDatasetId('');
-      return;
-    }
-    const exists = datasets.some((item) => item.id === selectedDatasetId);
-    if (!exists) {
-      setSelectedDatasetId(datasets[0].id);
-    }
-  }, [datasets, selectedDatasetId]);
+    setSelectedDatasetId((prev) => {
+      if (datasets.length === 0) return '';
+      const exists = datasets.some((item) => item.id === prev);
+      return exists ? prev : datasets[0].id;
+    });
+  }, [datasets]);
 
   useEffect(() => {
-    if (standards.length === 0) {
-      setSelectedStandardId('');
-      return;
-    }
-    const exists = standards.some((item) => item.id === selectedStandardId);
-    if (!exists) {
-      setSelectedStandardId(standards[0].id);
-    }
-  }, [selectedStandardId, standards]);
+    setSelectedStandardId((prev) => {
+      if (standards.length === 0) return '';
+      const exists = standards.some((item) => item.id === prev);
+      return exists ? prev : standards[0].id;
+    });
+  }, [standards]);
 
   useEffect(() => {
     if (!selectedDatasetId) {
@@ -371,9 +365,17 @@ export default function DemoPage() {
     void run();
   }, [artifactStatus]);
 
-  const runningJobs = jobs.filter((job) => job.status === 'running').length;
-  const queuedJobs = jobs.filter((job) => job.status === 'queued').length;
-  const failedJobs = jobs.filter((job) => job.status === 'failed').length;
+  const { runningJobs, queuedJobs, failedJobs } = useMemo(() => {
+    let running = 0;
+    let queued = 0;
+    let failed = 0;
+    for (const job of jobs) {
+      if (job.status === 'running') running++;
+      else if (job.status === 'queued') queued++;
+      else if (job.status === 'failed') failed++;
+    }
+    return { runningJobs: running, queuedJobs: queued, failedJobs: failed };
+  }, [jobs]);
 
   const selectedDataset = useMemo(
     () => datasets.find((dataset) => dataset.id === selectedDatasetId) ?? null,
@@ -470,17 +472,15 @@ export default function DemoPage() {
   }, [sourcePreview]);
 
   useEffect(() => {
-    if (sourceGroups.length === 0) {
-      setSelectedGroupKey('');
-      return;
-    }
-    const defaultGroup =
-      [...sourceGroups].sort((left, right) => right.samples.length - left.samples.length)[0] ?? sourceGroups[0];
-    const exists = sourceGroups.some((group) => group.key === selectedGroupKey);
-    if (!exists) {
-      setSelectedGroupKey(defaultGroup.key);
-    }
-  }, [selectedGroupKey, sourceGroups]);
+    setSelectedGroupKey((prev) => {
+      if (sourceGroups.length === 0) return '';
+      const exists = sourceGroups.some((group) => group.key === prev);
+      if (exists) return prev;
+      const defaultGroup =
+        [...sourceGroups].sort((left, right) => right.samples.length - left.samples.length)[0] ?? sourceGroups[0];
+      return defaultGroup.key;
+    });
+  }, [sourceGroups]);
 
   const markSourcePreviewGenerated = useCallback((samplePath: string) => {
     setSourcePreview((prev) => {
@@ -516,7 +516,6 @@ export default function DemoPage() {
     () => sourceGroups.find((group) => group.key === selectedGroupKey) ?? sourceGroups[0] ?? null,
     [selectedGroupKey, sourceGroups],
   );
-  const currentGroupAllSamples = useMemo(() => currentGroup?.samples ?? [], [currentGroup]);
   const currentGroupSamples = useMemo(() => currentGroup?.samples ?? [], [currentGroup]);
   const asyncTrainGroup = useMemo(() => {
     if (sourceGroups.length === 0) {
@@ -673,7 +672,7 @@ export default function DemoPage() {
   );
 
   useEffect(() => {
-    if (!selectedDatasetId || currentGroupAllSamples.length === 0) {
+    if (!selectedDatasetId || currentGroupSamples.length === 0) {
       setPosePreviewLoading(false);
       setPosePreviewError('');
       setGroupPrepareDone(0);
@@ -683,7 +682,7 @@ export default function DemoPage() {
     let cancelled = false;
 
     const run = async () => {
-      const result = await ensureGroupPosePreview(currentGroupAllSamples, {
+      const result = await ensureGroupPosePreview(currentGroupSamples, {
         showLoading: true,
         updateError: true,
         onProgress: (done, total) => {
@@ -706,7 +705,7 @@ export default function DemoPage() {
     return () => {
       cancelled = true;
     };
-  }, [currentGroupAllSamples, ensureGroupPosePreview, selectedDatasetId]);
+  }, [currentGroupSamples, ensureGroupPosePreview, selectedDatasetId]);
 
   const modelFiles = useMemo(
     () => artifactManifest?.files.filter((item) => item.kind === 'model').slice(0, 6) ?? [],
@@ -1002,8 +1001,6 @@ export default function DemoPage() {
     syncSeekAll(anchorTime);
     syncSetRateAll(syncPlaybackRate);
 
-    syncPlayingRef.current = true;
-    setSyncPlaying(true);
     await Promise.allSettled(
       videos.map(async (element) => {
         if (Math.abs(element.currentTime - anchorTime) > 0.008) {
@@ -1018,11 +1015,14 @@ export default function DemoPage() {
       }),
     );
 
+    // 在所有 play() 尝试完成后再判断实际播放状态，避免短暂的假 playing
     if (master.paused) {
       syncPlayingRef.current = false;
       setSyncPlaying(false);
       return false;
     }
+    syncPlayingRef.current = true;
+    setSyncPlaying(true);
 
     syncFromMaster(true);
     return true;
@@ -1219,7 +1219,7 @@ export default function DemoPage() {
       setFollowTraining(false);
       setTrainHint(`训练失败：${followTrainJobId}`);
       setTrainEvents([]);
-        return;
+      return;
     }
 
     if (currentJob.status === 'succeeded') {
@@ -1354,21 +1354,21 @@ export default function DemoPage() {
   }, [handleSyncPause, refreshCore, selectedDataset?.train_config, selectedDatasetId, syncSeekAll]);
 
   const handleRegenerateCurrentGroup = useCallback(async () => {
-    if (!selectedDatasetId || currentGroupAllSamples.length === 0) {
+    if (!selectedDatasetId || currentGroupSamples.length === 0) {
       return;
     }
     setRegeneratingPose(true);
     setPosePreviewError('');
     setGroupPrepareDone(0);
-    setGroupPrepareTotal(currentGroupAllSamples.length);
+    setGroupPrepareTotal(currentGroupSamples.length);
     try {
-      for (const sample of currentGroupAllSamples) {
+      for (const sample of currentGroupSamples) {
         delete posePreviewCacheRef.current[sample.path];
         delete posePreviewPendingRef.current[sample.path];
       }
       setPosePreviewMap((prev) => {
         const next = { ...prev };
-        for (const sample of currentGroupAllSamples) {
+        for (const sample of currentGroupSamples) {
           delete next[sample.path];
         }
         return next;
@@ -1376,7 +1376,7 @@ export default function DemoPage() {
 
       let done = 0;
       const refreshed = await Promise.all(
-        currentGroupAllSamples.map(async (sample) => {
+        currentGroupSamples.map(async (sample) => {
           let payload: PosePreviewPayload | null = null;
           for (let attempt = 0; attempt < 3; attempt += 1) {
             try {
@@ -1422,7 +1422,7 @@ export default function DemoPage() {
     } finally {
       setRegeneratingPose(false);
     }
-  }, [currentGroup?.label, currentGroupAllSamples, markSourcePreviewGenerated, selectedDatasetId]);
+  }, [currentGroup?.label, currentGroupSamples, markSourcePreviewGenerated, selectedDatasetId]);
 
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -1646,7 +1646,7 @@ export default function DemoPage() {
                 <Button
                   variant="outline"
                   onClick={() => void handleRegenerateCurrentGroup()}
-                  disabled={regeneratingPose || !selectedDatasetId || currentGroupAllSamples.length === 0}
+                  disabled={regeneratingPose || !selectedDatasetId || currentGroupSamples.length === 0}
                   className="gap-2"
                 >
                   <RefreshCw size={16} className={regeneratingPose ? 'animate-spin' : ''} />
@@ -1786,7 +1786,7 @@ export default function DemoPage() {
               </div>
               <div className="mt-2 flex items-center gap-2 text-xs text-zinc-600">
                 <span className="rounded-md border border-zinc-200 bg-white px-2 py-1">
-                  当前组预览就绪 {groupPrepareDone}/{groupPrepareTotal || currentGroupAllSamples.length}
+                  当前组预览就绪 {groupPrepareDone}/{groupPrepareTotal || currentGroupSamples.length}
                 </span>
                 <div className="h-1.5 flex-1 rounded-full bg-zinc-200">
                   <div
