@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Database,
   FileStack,
   Film,
   LoaderCircle,
@@ -208,16 +207,14 @@ export default function DemoPage() {
     void run();
   }, [artifactStatus]);
 
-  const { runningJobs, queuedJobs, failedJobs } = useMemo(() => {
+  const { runningJobs, failedJobs } = useMemo(() => {
     let running = 0;
-    let queued = 0;
     let failed = 0;
     for (const job of jobs) {
       if (job.status === 'running') running++;
-      else if (job.status === 'queued') queued++;
       else if (job.status === 'failed') failed++;
     }
-    return { runningJobs: running, queuedJobs: queued, failedJobs: failed };
+    return { runningJobs: running, failedJobs: failed };
   }, [jobs]);
 
   const orderedJobs = useMemo(
@@ -681,22 +678,7 @@ export default function DemoPage() {
 
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <section className="rounded-2xl border border-zinc-200 bg-white p-8 shadow-sm">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h1 className="text-3xl font-black tracking-tight text-zinc-900">训练工作台</h1>
-            <p className="mt-2 text-zinc-600">
-              左侧管理素材与标准化流程，右侧查看训练视频、2D/3D骨架和训练产物。
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button variant="outline" onClick={() => void refreshCore()} disabled={loading} className="gap-2">
-              <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
-              刷新状态
-            </Button>
-          </div>
-        </div>
-      </section>
+      {/* header 已合并到素材面板 */}
 
       {trainHint && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-800">
@@ -754,48 +736,35 @@ export default function DemoPage() {
         </section>
       )}
 
-      <div className="flex flex-wrap items-center gap-3 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs shadow-sm">
-        <span className="flex items-center gap-1.5 font-semibold text-zinc-700">
-          <span className={`inline-block h-2 w-2 rounded-full ${health === 'ok' ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`} />
-          {health === 'ok' ? '后端在线' : '后端离线'}
-        </span>
-        <span className="text-zinc-300">|</span>
-        <span className="text-zinc-600">数据集 <b className="text-zinc-900">{datasets.length}</b></span>
-        {runningJobs > 0 && (
-          <>
-            <span className="text-zinc-300">|</span>
-            <span className="text-amber-600">运行中 <b>{runningJobs}</b></span>
-          </>
-        )}
-        {queuedJobs > 0 && (
-          <span className="text-zinc-500">排队 <b>{queuedJobs}</b></span>
-        )}
-        {failedJobs > 0 && (
-          <>
-            <span className="text-zinc-300">|</span>
-            <span className="text-rose-600">失败 <b>{failedJobs}</b></span>
-          </>
-        )}
-      </div>
-
       <section className="space-y-6">
         <div className="space-y-6">
-            <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
+            <div className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <h2 className="flex items-center gap-2 text-base font-bold text-zinc-800">
-                  <Database size={18} />
-                  素材与状态面板
-                </h2>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="gap-2"
-                  disabled={previewLoading || !selectedDatasetId}
-                  onClick={() => void refreshPreview(selectedDatasetId)}
-                >
-                  <RefreshCw size={14} className={previewLoading ? 'animate-spin' : ''} />
-                  刷新素材预览
-                </Button>
+                <div className="flex items-center gap-3">
+                  <h1 className="text-lg font-bold text-zinc-900">训练工作台</h1>
+                  <span className="flex items-center gap-1.5 text-xs text-zinc-500">
+                    <span className={`inline-block h-2 w-2 rounded-full ${health === 'ok' ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`} />
+                    {health === 'ok' ? '在线' : '离线'}
+                  </span>
+                  {failedJobs > 0 && <span className="text-xs text-rose-600">失败 {failedJobs}</span>}
+                  {runningJobs > 0 && <span className="text-xs text-amber-600">运行中 {runningJobs}</span>}
+                </div>
+                <div className="flex gap-2">
+                  <Button variant="outline" size="sm" onClick={() => void refreshCore()} disabled={loading} className="gap-1.5">
+                    <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+                    刷新
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-1.5"
+                    disabled={previewLoading || !selectedDatasetId}
+                    onClick={() => void refreshPreview(selectedDatasetId)}
+                  >
+                    <RefreshCw size={14} className={previewLoading ? 'animate-spin' : ''} />
+                    素材
+                  </Button>
+                </div>
               </div>
               <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-2">
                 <div>
