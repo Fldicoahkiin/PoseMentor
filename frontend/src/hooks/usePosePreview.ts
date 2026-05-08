@@ -3,6 +3,7 @@ import { fetchPosePreview, type PosePreviewPayload, type SourcePreviewItem } fro
 
 export type PosePreviewState = {
   posePreviewMap: Record<string, PosePreviewPayload>;
+  setPosePreviewMap: React.Dispatch<React.SetStateAction<Record<string, PosePreviewPayload>>>;
   posePreviewLoading: boolean;
   setPosePreviewLoading: (v: boolean) => void;
   posePreviewError: string;
@@ -20,6 +21,7 @@ export type PosePreviewState = {
       onProgress?: (done: number, total: number) => void;
     },
   ) => Promise<{ missing: string[] }>;
+  invalidateSamples: (paths: string[]) => void;
 };
 
 export function usePosePreview(
@@ -165,8 +167,23 @@ export function usePosePreview(
     [fetchPosePreviewForSample, selectedDatasetId],
   );
 
+  const invalidateSamples = useCallback((paths: string[]) => {
+    for (const p of paths) {
+      delete posePreviewCacheRef.current[p];
+      delete posePreviewPendingRef.current[p];
+    }
+    setPosePreviewMap((prev) => {
+      const next = { ...prev };
+      for (const p of paths) {
+        delete next[p];
+      }
+      return next;
+    });
+  }, []);
+
   return {
     posePreviewMap,
+    setPosePreviewMap,
     posePreviewLoading,
     setPosePreviewLoading,
     posePreviewError,
@@ -177,6 +194,7 @@ export function usePosePreview(
     setGroupPrepareTotal,
     fetchPosePreviewForSample,
     ensureGroupPosePreview,
+    invalidateSamples,
   };
 }
 
