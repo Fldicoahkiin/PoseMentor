@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
   Database,
@@ -37,20 +37,15 @@ import {
 } from '../lib/api';
 import {
   CAMERA_TOKEN_PATTERN,
-  SYNC_DRIFT_TOLERANCE,
-  SYNC_TICK_MS,
-  SYNC_PAUSE_SETTLE_MS,
   formatBytes,
   formatClock,
   formatDecimal,
   formatFrameOffset,
   formatTime,
-  seekVideo,
-  pickMedian,
-  waitForVideoPlayable,
 } from '../lib/videoUtils';
 import { useDatasetSelection } from '../hooks/useDatasetSelection';
 import { usePosePreview } from '../hooks/usePosePreview';
+import { useSyncPlayback } from '../hooks/useSyncPlayback';
 import { useTrainingFollow } from '../hooks/useTrainingFollow';
 import { useSourceGroups } from '../hooks/useSourceGroups';
 
@@ -119,21 +114,10 @@ export default function DemoPage() {
   const [artifactManifest, setArtifactManifest] = useState<ArtifactManifestPayload | null>(null);
   const [sourcePreview, setSourcePreview] = useState<SourcePreviewPayload | null>(null);
   const [summaryText, setSummaryText] = useState('');
-  const [syncCurrentTime, setSyncCurrentTime] = useState(0);
-  const [syncDuration, setSyncDuration] = useState(0);
-  const [syncPlaying, setSyncPlaying] = useState(false);
-  const [syncPlaybackRate, setSyncPlaybackRate] = useState(1);
   const [trainSubmitting, setTrainSubmitting] = useState(false);
   const [regeneratingPose, setRegeneratingPose] = useState(false);
   const [autoAdvancePending, setAutoAdvancePending] = useState(false);
   const autoPlayedJobRef = useRef('');
-  const sourceVideoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
-  const syncTickerRef = useRef<number | null>(null);
-  const syncPauseSettleRef = useRef<number | null>(null);
-  const syncCurrentTimeRef = useRef(0);
-  const syncUiUpdateAtRef = useRef(0);
-  const syncPlayingRef = useRef(false);
-  const syncPauseGuardRef = useRef(false);
 
   const sourceGroups = useSourceGroups(sourcePreview);
   const {
@@ -327,6 +311,16 @@ export default function DemoPage() {
     [selectedGroupKey, sourceGroups],
   );
   const currentGroupSamples = useMemo(() => currentGroup?.samples ?? [], [currentGroup]);
+  const currentGroupSamplePaths = useMemo(() => currentGroupSamples.map((s) => s.path), [currentGroupSamples]);
+  const {
+    syncPlaying, syncCurrentTime, syncDuration, syncPlaybackRate,
+    sourceVideoRefs, syncPlayingRef, syncPauseGuardRef,
+    setSyncPlaying,
+    getMasterSourceVideo, syncSeekAll, syncFromMaster,
+    handleSyncPlay: rawSyncPlay, handleSyncPause, handleSyncRateChange,
+    handleSyncLoadedMetadata, handleVideoLoadedData, handleSourceTimeUpdate,
+    resetSyncState,
+  } = useSyncPlayback(currentGroupSamplePaths);
   const nextGroup = useMemo(() => {
     if (!currentGroup || sourceGroups.length <= 1) {
       return null;
@@ -501,6 +495,14 @@ export default function DemoPage() {
     startFollowing,
   } = useTrainingFollow(jobs, latestTrainJob, syncReady);
 
+  const handleSyncPlay = useCallback(async (): Promise<boolean> => {
+    if (followTraining) {
+      setTrainHint('训练仍在进行，等待当前任务完成后再播放。');
+      return false;
+    }
+    return rawSyncPlay();
+  }, [followTraining, rawSyncPlay, setTrainHint]);
+
   const asyncTrainGroup = useMemo(() => {
     if (sourceGroups.length === 0) return null;
     if (!followTraining && followProgress <= 0) return null;
@@ -519,270 +521,6 @@ export default function DemoPage() {
   const alignmentCameraGridClasses =
     ALIGNMENT_CAMERA_GRID_CLASSES_BY_COUNT[layoutViewCount] ?? ALIGNMENT_CAMERA_GRID_CLASSES_BY_COUNT[MAX_LAYOUT_VIEW_COUNT];
 
-  const masterSourcePath = currentGroupSamples[0]?.path ?? '';
-  const getMasterSourceVideo = useCallback(() => {
-    if (!masterSourcePath) {
-      return null;
-    }
-    return sourceVideoRefs.current[masterSourcePath] ?? null;
-  }, [masterSourcePath]);
-
-  const getSyncVideos = useCallback(() => {
-    const nodes: HTMLVideoElement[] = [];
-    for (const sample of currentGroupSamples) {
-      const sourceNode = sourceVideoRefs.current[sample.path];
-      if (sourceNode) {
-        nodes.push(sourceNode);
-      }
-    }
-    return nodes;
-  }, [currentGroupSamples]);
-
-  const getFollowerVideos = useCallback(() => {
-    const master = getMasterSourceVideo();
-    return getSyncVideos().filter((node) => node !== master);
-  }, [getMasterSourceVideo, getSyncVideos]);
-
-  const getSyncTimes = useCallback(() => {
-    const master = getMasterSourceVideo();
-    const masterTime = master?.currentTime;
-    if (Number.isFinite(masterTime) && masterTime !== undefined) {
-      return [masterTime];
-    }
-    return getSyncVideos()
-      .filter((node) => node.readyState >= 2)
-      .map((node) => node.currentTime)
-      .filter((value) => Number.isFinite(value) && value >= 0);
-  }, [getMasterSourceVideo, getSyncVideos]);
-
-  const clearSyncTicker = useCallback(() => {
-    if (syncTickerRef.current !== null) {
-      window.clearInterval(syncTickerRef.current);
-      syncTickerRef.current = null;
-    }
-  }, []);
-
-  const clearSyncPauseSettleTimer = useCallback(() => {
-    if (syncPauseSettleRef.current !== null) {
-      window.clearTimeout(syncPauseSettleRef.current);
-      syncPauseSettleRef.current = null;
-    }
-  }, []);
-
-  const recomputeSyncDuration = useCallback(() => {
-    const durations = getSyncVideos()
-      .map((node) => node.duration)
-      .filter((value) => Number.isFinite(value) && value > 0);
-    if (durations.length > 0) {
-      setSyncDuration(Math.min(...durations));
-    }
-  }, [getSyncVideos]);
-
-  const updateSyncCurrentTime = useCallback((nextTime: number, force: boolean) => {
-    const previous = syncCurrentTimeRef.current;
-    syncCurrentTimeRef.current = nextTime;
-    const now = window.performance.now();
-    if (!force) {
-      if (Math.abs(nextTime - previous) < 0.015 && now - syncUiUpdateAtRef.current < 48) {
-        return;
-      }
-      if (now - syncUiUpdateAtRef.current < 32) {
-        return;
-      }
-    }
-    syncUiUpdateAtRef.current = now;
-    setSyncCurrentTime(nextTime);
-  }, []);
-
-  const syncSeekAll = useCallback((timeSeconds: number) => {
-    const normalizedTime = Math.max(0, timeSeconds);
-    getSyncVideos().forEach((element) => {
-      if (Math.abs(element.currentTime - normalizedTime) > 0.008) {
-        seekVideo(element, normalizedTime);
-      }
-      if (Math.abs(element.playbackRate - syncPlaybackRate) > 0.001) {
-        element.playbackRate = syncPlaybackRate;
-      }
-    });
-    updateSyncCurrentTime(normalizedTime, true);
-  }, [getSyncVideos, syncPlaybackRate, updateSyncCurrentTime]);
-
-  const syncSetRateAll = useCallback(
-    (rate: number) => {
-      const master = getMasterSourceVideo();
-      if (master) {
-        master.playbackRate = rate;
-      }
-      getFollowerVideos().forEach((element) => {
-        element.playbackRate = rate;
-      });
-    },
-    [getFollowerVideos, getMasterSourceVideo],
-  );
-
-  const syncFromMaster = useCallback(
-    (force: boolean) => {
-      const master = getMasterSourceVideo();
-      if (!master || syncPauseGuardRef.current) {
-        return;
-      }
-      const sourceTime = master.currentTime;
-      const tolerance = force ? 0.008 : SYNC_DRIFT_TOLERANCE;
-      getFollowerVideos().forEach((element) => {
-        if (element.readyState < 2) {
-          return;
-        }
-        if (Math.abs(element.currentTime - sourceTime) > tolerance) {
-          seekVideo(element, sourceTime);
-        }
-        if (Math.abs(element.playbackRate - syncPlaybackRate) > 0.001) {
-          element.playbackRate = syncPlaybackRate;
-        }
-        if (!master.paused && element.paused) {
-          void element.play().catch(() => undefined);
-        }
-      });
-      if (Math.abs(master.playbackRate - syncPlaybackRate) > 0.001) {
-        master.playbackRate = syncPlaybackRate;
-      }
-      updateSyncCurrentTime(sourceTime, force);
-    },
-    [getFollowerVideos, getMasterSourceVideo, syncPlaybackRate, updateSyncCurrentTime],
-  );
-
-  const handleSyncLoadedMetadata = useCallback(
-    (video: HTMLVideoElement) => {
-      video.playbackRate = syncPlaybackRate;
-      const anchorTime = syncCurrentTimeRef.current;
-      if (anchorTime > 0.01 && Math.abs(video.currentTime - anchorTime) > 0.02) {
-        seekVideo(video, anchorTime);
-      }
-      if (video !== getMasterSourceVideo() && !syncPlayingRef.current && !video.paused) {
-        video.pause();
-      }
-      recomputeSyncDuration();
-    },
-    [getMasterSourceVideo, recomputeSyncDuration, syncPlaybackRate],
-  );
-
-  const handleVideoLoadedData = useCallback((video: HTMLVideoElement) => {
-    if (syncCurrentTimeRef.current > 0.01 || video.readyState < 2 || video.duration <= 0.05) {
-      return;
-    }
-    if (video.currentTime > 0.001) {
-      return;
-    }
-    try {
-      video.currentTime = 0.001;
-    } catch {
-      return;
-    }
-  }, []);
-
-  const handleSourceTimeUpdate = useCallback(() => {
-    const source = getMasterSourceVideo();
-    if (!source || syncPauseGuardRef.current) {
-      return;
-    }
-    syncFromMaster(false);
-  }, [getMasterSourceVideo, syncFromMaster]);
-
-  const handleSyncPlay = useCallback(async (): Promise<boolean> => {
-    if (followTraining) {
-      setTrainHint('训练仍在进行，等待当前任务完成后再播放。');
-      return false;
-    }
-    const master = getMasterSourceVideo();
-    if (!master) {
-      return false;
-    }
-    const videos = getSyncVideos();
-    if (videos.length === 0) {
-      return false;
-    }
-
-    clearSyncTicker();
-    clearSyncPauseSettleTimer();
-    syncPauseGuardRef.current = false;
-
-    const anchorTime = pickMedian(getSyncTimes(), syncCurrentTimeRef.current);
-    await Promise.all(videos.map((element) => waitForVideoPlayable(element)));
-    syncSeekAll(anchorTime);
-    syncSetRateAll(syncPlaybackRate);
-
-    await Promise.allSettled(
-      videos.map(async (element) => {
-        if (Math.abs(element.currentTime - anchorTime) > 0.008) {
-          seekVideo(element, anchorTime);
-        }
-        if (Math.abs(element.playbackRate - syncPlaybackRate) > 0.001) {
-          element.playbackRate = syncPlaybackRate;
-        }
-        if (element.paused) {
-          await element.play();
-        }
-      }),
-    );
-
-    // 在所有 play() 尝试完成后再判断实际播放状态，避免短暂的假 playing
-    if (master.paused) {
-      syncPlayingRef.current = false;
-      setSyncPlaying(false);
-      return false;
-    }
-    syncPlayingRef.current = true;
-    setSyncPlaying(true);
-
-    syncFromMaster(true);
-    return true;
-  }, [
-    clearSyncPauseSettleTimer,
-    clearSyncTicker,
-    followTraining,
-    getMasterSourceVideo,
-    getSyncTimes,
-    getSyncVideos,
-    syncFromMaster,
-    syncPlaybackRate,
-    syncSeekAll,
-    syncSetRateAll,
-  ]);
-
-  const handleSyncPause = useCallback(() => {
-    if (syncPauseGuardRef.current) {
-      return;
-    }
-    syncPauseGuardRef.current = true;
-    syncPlayingRef.current = false;
-    clearSyncTicker();
-    clearSyncPauseSettleTimer();
-
-    const pauseTime = pickMedian(getSyncTimes(), syncCurrentTimeRef.current);
-    const videos = getSyncVideos();
-    videos.forEach((element) => {
-      element.pause();
-      if (Math.abs(element.playbackRate - syncPlaybackRate) > 0.001) {
-        element.playbackRate = syncPlaybackRate;
-      }
-    });
-    syncSeekAll(pauseTime);
-    syncPauseSettleRef.current = window.setTimeout(() => {
-      syncSeekAll(pauseTime);
-      syncPauseGuardRef.current = false;
-      syncPauseSettleRef.current = null;
-    }, SYNC_PAUSE_SETTLE_MS);
-    setSyncPlaying(false);
-  }, [clearSyncPauseSettleTimer, clearSyncTicker, getSyncTimes, getSyncVideos, syncPlaybackRate, syncSeekAll]);
-
-  const handleSyncRateChange = useCallback(
-    (event: ChangeEvent<HTMLSelectElement>) => {
-      const nextRate = Number(event.target.value);
-      setSyncPlaybackRate(nextRate);
-      syncSetRateAll(nextRate);
-    },
-    [syncSetRateAll],
-  );
-
   const handleMasterEnded = useCallback(() => {
     const master = getMasterSourceVideo();
     const endTime = master?.currentTime ?? syncDuration;
@@ -798,20 +536,7 @@ export default function DemoPage() {
     setTrainHint(`当前素材组播放结束，切换到 ${nextGroup.label}`);
   }, [followTraining, getMasterSourceVideo, handleSyncPause, nextGroup, selectedGroupKey, syncDuration, syncSeekAll]);
 
-  useEffect(() => {
-    syncPlayingRef.current = syncPlaying;
-    if (!syncPlaying) {
-      clearSyncTicker();
-      return undefined;
-    }
-    clearSyncTicker();
-    syncTickerRef.current = window.setInterval(() => {
-      syncFromMaster(false);
-    }, SYNC_TICK_MS);
-    return () => {
-      clearSyncTicker();
-    };
-  }, [clearSyncTicker, syncFromMaster, syncPlaying]);
+  // sync ticker effect 已迁移到 useSyncPlayback hook
 
   useEffect(() => {
     if (!autoAdvancePending || !syncReady || followTraining) {
@@ -831,17 +556,8 @@ export default function DemoPage() {
   }, [autoAdvancePending, followTraining, handleSyncPlay, syncDuration, syncReady]);
 
   useEffect(() => {
-    setSyncCurrentTime(0);
-    setSyncDuration(0);
-    setSyncPlaying(false);
-    syncCurrentTimeRef.current = 0;
-    syncUiUpdateAtRef.current = 0;
-    syncPlayingRef.current = false;
-    syncPauseGuardRef.current = false;
-    sourceVideoRefs.current = {};
-    clearSyncTicker();
-    clearSyncPauseSettleTimer();
-  }, [clearSyncPauseSettleTimer, clearSyncTicker, selectedDatasetId, selectedGroupKey]);
+    resetSyncState();
+  }, [resetSyncState, selectedDatasetId, selectedGroupKey]);
 
   useEffect(() => {
     autoPlayedJobRef.current = '';

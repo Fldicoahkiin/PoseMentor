@@ -17,6 +17,7 @@ export type SyncPlaybackControls = {
   sourceVideoRefs: React.MutableRefObject<Record<string, HTMLVideoElement | null>>;
   syncCurrentTimeRef: React.MutableRefObject<number>;
   syncPlayingRef: React.MutableRefObject<boolean>;
+  syncPauseGuardRef: React.MutableRefObject<boolean>;
   setSyncPlaybackRate: (rate: number) => void;
   setSyncPlaying: (v: boolean) => void;
   setSyncCurrentTime: (v: number) => void;
@@ -89,18 +90,31 @@ export function useSyncPlayback(currentGroupSamplePaths: string[]): SyncPlayback
   }, [currentGroupSamplePaths]);
 
   const getSyncTimes = useCallback((): number[] => {
+    const master = getMasterSourceVideo();
+    const masterTime = master?.currentTime;
+    if (Number.isFinite(masterTime) && masterTime !== undefined) {
+      return [masterTime];
+    }
     return getSyncVideos()
       .filter((v) => v.readyState >= 2)
-      .map((v) => v.currentTime);
-  }, [getSyncVideos]);
+      .map((v) => v.currentTime)
+      .filter((value) => Number.isFinite(value) && value >= 0);
+  }, [getMasterSourceVideo, getSyncVideos]);
 
   const updateSyncCurrentTime = useCallback((time: number, force: boolean) => {
+    const previous = syncCurrentTimeRef.current;
     syncCurrentTimeRef.current = time;
     const now = performance.now();
-    if (force || now - syncUiUpdateAtRef.current > 80) {
-      syncUiUpdateAtRef.current = now;
-      setSyncCurrentTime(time);
+    if (!force) {
+      if (Math.abs(time - previous) < 0.015 && now - syncUiUpdateAtRef.current < 48) {
+        return;
+      }
+      if (now - syncUiUpdateAtRef.current < 32) {
+        return;
+      }
     }
+    syncUiUpdateAtRef.current = now;
+    setSyncCurrentTime(time);
   }, []);
 
   const recomputeSyncDuration = useCallback(() => {
@@ -116,10 +130,18 @@ export function useSyncPlayback(currentGroupSamplePaths: string[]): SyncPlayback
 
   const syncSeekAll = useCallback(
     (time: number) => {
-      getSyncVideos().forEach((element) => seekVideo(element, time));
-      updateSyncCurrentTime(time, true);
+      const normalizedTime = Math.max(0, time);
+      getSyncVideos().forEach((element) => {
+        if (Math.abs(element.currentTime - normalizedTime) > 0.008) {
+          seekVideo(element, normalizedTime);
+        }
+        if (Math.abs(element.playbackRate - syncPlaybackRate) > 0.001) {
+          element.playbackRate = syncPlaybackRate;
+        }
+      });
+      updateSyncCurrentTime(normalizedTime, true);
     },
-    [getSyncVideos, updateSyncCurrentTime],
+    [getSyncVideos, syncPlaybackRate, updateSyncCurrentTime],
   );
 
   const syncSetRateAll = useCallback(
@@ -304,6 +326,7 @@ export function useSyncPlayback(currentGroupSamplePaths: string[]): SyncPlayback
     sourceVideoRefs,
     syncCurrentTimeRef,
     syncPlayingRef,
+    syncPauseGuardRef,
     setSyncPlaybackRate,
     setSyncPlaying,
     setSyncCurrentTime,
