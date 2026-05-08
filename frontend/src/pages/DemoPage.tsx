@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Activity,
   Database,
   FileStack,
   Film,
@@ -8,8 +7,6 @@ import {
   Pause,
   Play,
   RefreshCw,
-  Server,
-  TriangleAlert,
 } from 'lucide-react';
 import { AlignmentInfoPanel } from '../components/AlignmentInfoPanel';
 import { Pose2DViewport } from '../components/Pose2DViewport';
@@ -757,46 +754,29 @@ export default function DemoPage() {
         </section>
       )}
 
-      <section className="grid grid-cols-2 gap-4 xl:grid-cols-5">
-        <div className="rounded-xl border border-zinc-200 bg-stone-50 p-4 shadow-sm">
-          <div className="flex items-center justify-between text-zinc-500">
-            <span className="text-xs font-bold uppercase tracking-wider">后端状态</span>
-            <Server size={16} />
-          </div>
-          <div className="mt-3 text-2xl font-black text-zinc-900">{health === 'ok' ? '在线' : '离线'}</div>
-        </div>
-
-        <div className="rounded-xl border border-zinc-200 bg-stone-50 p-4 shadow-sm">
-          <div className="flex items-center justify-between text-zinc-500">
-            <span className="text-xs font-bold uppercase tracking-wider">数据集</span>
-            <Database size={16} />
-          </div>
-          <div className="mt-3 text-2xl font-black text-zinc-900">{datasets.length}</div>
-        </div>
-
-        <div className="rounded-xl border border-zinc-200 bg-stone-50 p-4 shadow-sm">
-          <div className="flex items-center justify-between text-zinc-500">
-            <span className="text-xs font-bold uppercase tracking-wider">运行中任务</span>
-            <Activity size={16} />
-          </div>
-          <div className="mt-3 text-2xl font-black text-zinc-900">{runningJobs}</div>
-        </div>
-
-        <div className="rounded-xl border border-zinc-200 bg-stone-50 p-4 shadow-sm">
-          <div className="flex items-center justify-between text-zinc-500">
-            <span className="text-xs font-bold uppercase tracking-wider">排队任务</span>
-            <Activity size={16} />
-          </div>
-          <div className="mt-3 text-2xl font-black text-zinc-900">{queuedJobs}</div>
-        </div>
-        <div className="rounded-xl border border-zinc-200 bg-stone-50 p-4 shadow-sm">
-          <div className="flex items-center justify-between text-zinc-500">
-            <span className="text-xs font-bold uppercase tracking-wider">失败任务</span>
-            <TriangleAlert size={16} />
-          </div>
-          <div className="mt-3 text-2xl font-black text-zinc-900">{failedJobs}</div>
-        </div>
-      </section>
+      <div className="flex flex-wrap items-center gap-3 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs shadow-sm">
+        <span className="flex items-center gap-1.5 font-semibold text-zinc-700">
+          <span className={`inline-block h-2 w-2 rounded-full ${health === 'ok' ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`} />
+          {health === 'ok' ? '后端在线' : '后端离线'}
+        </span>
+        <span className="text-zinc-300">|</span>
+        <span className="text-zinc-600">数据集 <b className="text-zinc-900">{datasets.length}</b></span>
+        {runningJobs > 0 && (
+          <>
+            <span className="text-zinc-300">|</span>
+            <span className="text-amber-600">运行中 <b>{runningJobs}</b></span>
+          </>
+        )}
+        {queuedJobs > 0 && (
+          <span className="text-zinc-500">排队 <b>{queuedJobs}</b></span>
+        )}
+        {failedJobs > 0 && (
+          <>
+            <span className="text-zinc-300">|</span>
+            <span className="text-rose-600">失败 <b>{failedJobs}</b></span>
+          </>
+        )}
+      </div>
 
       <section className="space-y-6">
         <div className="space-y-6">
@@ -853,44 +833,30 @@ export default function DemoPage() {
                   </select>
                 </div>
               </div>
-              <div className="mt-3 grid grid-cols-1 gap-2 lg:grid-cols-3">
-                <div className="rounded-xl border border-zinc-200 bg-stone-50 px-3 py-2 text-sm text-zinc-700">
-                  当前数据源：<span className="font-semibold text-zinc-900">{selectedDataset?.mode || 'unknown'}</span>
-                </div>
-                <div className="rounded-xl border border-zinc-200 bg-stone-50 px-3 py-2 text-sm text-zinc-700">
-                  当前标准库：<span className="font-semibold text-zinc-900">{selectedStandard?.name || '-'}</span>
-                </div>
-                <div className="rounded-xl border border-zinc-200 bg-stone-50 px-3 py-2 text-sm text-zinc-700">
-                  视频根目录：<span className="font-semibold text-zinc-900">{sourcePreview?.video_root || '-'}</span>
-                </div>
+              <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-zinc-500">
+                <span>模式 <b className="text-zinc-800">{selectedDataset?.mode || '-'}</b></span>
+                <span>标准 <b className="text-zinc-800">{selectedStandard?.name || '-'}</b></span>
+                <span>路径 <b className="text-zinc-800">{sourcePreview?.video_root || '-'}</b></span>
               </div>
-              <div className="mt-3 rounded-xl border border-zinc-200 bg-stone-50 px-3 py-2">
-                <p className="mb-2 text-xs font-bold uppercase tracking-wider text-zinc-500">流程状态</p>
-                <div className="flex flex-wrap gap-2">
+              <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1">
                   {pipelineSteps.map((step) => (
-                    <div
+                    <span
                       key={step.name}
-                      className="flex items-center gap-2 rounded-full border border-zinc-200 bg-white px-2.5 py-1.5"
+                      className="flex items-center gap-1 text-[11px] text-zinc-600"
                       title={step.detail}
                     >
-                      <span className="text-xs font-semibold text-zinc-800">{step.name}</span>
-                      <span
-                        className={`rounded-md px-1.5 py-0.5 text-[11px] font-semibold ${
-                          step.status === 'ready'
-                            ? 'bg-emerald-100 text-emerald-700'
-                            : step.status === 'running'
-                              ? 'bg-amber-100 text-amber-700'
-                              : step.status === 'error'
-                                ? 'bg-rose-100 text-rose-700'
-                                : 'bg-zinc-200 text-zinc-600'
-                        }`}
-                      >
-                        {step.status}
-                      </span>
-                      <span className="max-w-44 truncate text-[11px] text-zinc-500">{step.detail}</span>
-                    </div>
+                      <span className={`inline-block h-1.5 w-1.5 rounded-full ${
+                        step.status === 'ready'
+                          ? 'bg-emerald-500'
+                          : step.status === 'running'
+                            ? 'bg-amber-500 animate-pulse'
+                            : step.status === 'error'
+                              ? 'bg-rose-500'
+                              : 'bg-zinc-300'
+                      }`} />
+                      {step.name}
+                    </span>
                   ))}
-                </div>
               </div>
             </div>
 
