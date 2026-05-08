@@ -41,19 +41,29 @@ tests/                      # pytest 测试
 ## Development Commands
 
 ```bash
-# 后端
-uv run python backend_api.py              # 启动 API (0.0.0.0:8787)
+# 全栈（推荐）
+./pm up                                    # 启动前后端服务
+./pm down                                  # 停止前后端服务
+./pm restart                               # 重启
+./pm status                                # 查看服务状态
+./pm logs                                  # 查看服务日志
+
+# CLI 其他命令
+./pm config                                # 生成或更新本地配置
+./pm init                                  # 安装依赖并初始化
+./pm doctor                                # 检查运行环境和依赖
+./pm cleanup                               # 清理僵尸进程和 PID
+
+# 单独启动
+uv run python backend_api.py              # 仅启动后端 API (0.0.0.0:8787)
+cd frontend && pnpm dev                    # 仅启动前端开发服务器 (localhost:7860)
+
+# 质量检查
 uv run pytest tests/                       # 运行测试
 uv run ruff check src/ backend_api.py      # Lint
 uv run mypy src/                           # 类型检查
-
-# 前端
-cd frontend && pnpm dev                    # 开发服务器 (localhost:7860)
-cd frontend && pnpm lint                   # ESLint
-cd frontend && pnpm build                  # 生产构建
-
-# 全栈
-honcho start                               # 通过 Procfile 同时启动后端+前端
+cd frontend && pnpm lint                   # 前端 ESLint
+cd frontend && pnpm build                  # 前端生产构建
 ```
 
 ## Code Conventions
