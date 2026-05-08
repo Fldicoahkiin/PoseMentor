@@ -4,9 +4,13 @@ import { fetchPosePreview, type PosePreviewPayload, type SourcePreviewItem } fro
 export type PosePreviewState = {
   posePreviewMap: Record<string, PosePreviewPayload>;
   posePreviewLoading: boolean;
+  setPosePreviewLoading: (v: boolean) => void;
   posePreviewError: string;
+  setPosePreviewError: (v: string) => void;
   groupPrepareDone: number;
+  setGroupPrepareDone: (v: number) => void;
   groupPrepareTotal: number;
+  setGroupPrepareTotal: (v: number) => void;
   fetchPosePreviewForSample: (sample: SourcePreviewItem) => Promise<PosePreviewPayload | null>;
   ensureGroupPosePreview: (
     samples: SourcePreviewItem[],
@@ -164,9 +168,13 @@ export function usePosePreview(
   return {
     posePreviewMap,
     posePreviewLoading,
+    setPosePreviewLoading,
     posePreviewError,
+    setPosePreviewError,
     groupPrepareDone,
+    setGroupPrepareDone,
     groupPrepareTotal,
+    setGroupPrepareTotal,
     fetchPosePreviewForSample,
     ensureGroupPosePreview,
   };

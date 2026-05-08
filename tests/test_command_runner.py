@@ -12,7 +12,7 @@ def _wait_job_done(store: JobStore, job_id: str, timeout: float = 8.0) -> str:
     start = time.perf_counter()
     while time.perf_counter() - start < timeout:
         status = store.get(job_id).status
-        if status in {"success", "failed"}:
+        if status in {"succeeded", "failed"}:
             return status
         time.sleep(0.05)
     raise TimeoutError(f"job timeout: {job_id}")
@@ -32,7 +32,7 @@ def test_job_runner_default_single_worker_queue(tmp_path: Path) -> None:
     ]
 
     for job_id in job_ids:
-        assert _wait_job_done(store, job_id) == "success"
+        assert _wait_job_done(store, job_id) == "succeeded"
 
     elapsed = time.perf_counter() - start
     assert elapsed >= 0.45

@@ -11,8 +11,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-logger = logging.getLogger(__name__)
-
 import cv2
 import numpy as np
 from fastapi import APIRouter, FastAPI, HTTPException
@@ -41,6 +39,8 @@ from posementor.pipeline.preview_renderer import (
     render_source_preview_video,
 )
 from posementor.utils.io import ensure_dir, load_yaml, save_yaml
+
+logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 JOB_ROOT = PROJECT_ROOT / "outputs" / "job_center"
