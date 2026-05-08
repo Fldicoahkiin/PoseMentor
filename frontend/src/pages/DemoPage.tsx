@@ -21,7 +21,6 @@ import {
   fetchArtifactStatus,
   fetchDatasets,
   fetchHealth,
-  fetchJobProgress,
   fetchJobs,
   fetchPosePreview,
   fetchSourcePreview,
@@ -41,7 +40,6 @@ import {
   SYNC_DRIFT_TOLERANCE,
   SYNC_TICK_MS,
   SYNC_PAUSE_SETTLE_MS,
-  TRAIN_PROGRESS_STALL_MS,
   formatBytes,
   formatClock,
   formatDecimal,
@@ -53,6 +51,7 @@ import {
 } from '../lib/videoUtils';
 import { useDatasetSelection } from '../hooks/useDatasetSelection';
 import { usePosePreview } from '../hooks/usePosePreview';
+import { useTrainingFollow } from '../hooks/useTrainingFollow';
 import { useSourceGroups } from '../hooks/useSourceGroups';
 
 type StepStatus = 'ready' | 'running' | 'waiting' | 'error';
@@ -126,19 +125,8 @@ export default function DemoPage() {
   const [syncPlaybackRate, setSyncPlaybackRate] = useState(1);
   const [trainSubmitting, setTrainSubmitting] = useState(false);
   const [regeneratingPose, setRegeneratingPose] = useState(false);
-  const [followTraining, setFollowTraining] = useState(false);
-  const [followTrainJobId, setFollowTrainJobId] = useState('');
-  const [followProgress, setFollowProgress] = useState(0);
-  const [followCurrentStep, setFollowCurrentStep] = useState(0);
-  const [followTotalStep, setFollowTotalStep] = useState(0);
-  const [trainEvents, setTrainEvents] = useState<string[]>([]);
-  const [trainHint, setTrainHint] = useState('');
   const [autoAdvancePending, setAutoAdvancePending] = useState(false);
-  const [pendingAutoPlayJobId, setPendingAutoPlayJobId] = useState('');
   const autoPlayedJobRef = useRef('');
-  const progressValueRef = useRef(0);
-  const [progressUpdatedAt, setProgressUpdatedAt] = useState(0);
-  const [progressWatchTs, setProgressWatchTs] = useState(0);
   const sourceVideoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
   const syncTickerRef = useRef<number | null>(null);
   const syncPauseSettleRef = useRef<number | null>(null);
@@ -339,22 +327,6 @@ export default function DemoPage() {
     [selectedGroupKey, sourceGroups],
   );
   const currentGroupSamples = useMemo(() => currentGroup?.samples ?? [], [currentGroup]);
-  const asyncTrainGroup = useMemo(() => {
-    if (sourceGroups.length === 0) {
-      return null;
-    }
-    if (!followTraining && followProgress <= 0) {
-      return null;
-    }
-    let ratio = followProgress;
-    if (followTotalStep > 0) {
-      ratio = followCurrentStep / Math.max(1, followTotalStep);
-    }
-    const bounded = Math.max(0, Math.min(0.999999, ratio));
-    const index = Math.min(sourceGroups.length - 1, Math.floor(bounded * sourceGroups.length));
-    return sourceGroups[index] ?? sourceGroups[0] ?? null;
-  }, [followCurrentStep, followProgress, followTotalStep, followTraining, sourceGroups]);
-  const asyncTrainGroupKey = asyncTrainGroup?.key ?? '';
   const nextGroup = useMemo(() => {
     if (!currentGroup || sourceGroups.length <= 1) {
       return null;
@@ -516,6 +488,32 @@ export default function DemoPage() {
     activeViewSlots.length > 0 &&
     activeViewSlots.every((slot) => slot.sourceVideoUrl && slot.pose2dDataUrl),
   );
+
+  const {
+    followTraining,
+    followProgress, followCurrentStep, followTotalStep,
+    trainHint, setTrainHint,
+    trainEvents,
+    trainingStalled,
+    progressPercent, progressTextPercent,
+    followStepLabel,
+    pendingAutoPlayJobId, setPendingAutoPlayJobId,
+    startFollowing,
+  } = useTrainingFollow(jobs, latestTrainJob, syncReady);
+
+  const asyncTrainGroup = useMemo(() => {
+    if (sourceGroups.length === 0) return null;
+    if (!followTraining && followProgress <= 0) return null;
+    let ratio = followProgress;
+    if (followTotalStep > 0) {
+      ratio = followCurrentStep / Math.max(1, followTotalStep);
+    }
+    const bounded = Math.max(0, Math.min(0.999999, ratio));
+    const index = Math.min(sourceGroups.length - 1, Math.floor(bounded * sourceGroups.length));
+    return sourceGroups[index] ?? sourceGroups[0] ?? null;
+  }, [followCurrentStep, followProgress, followTotalStep, followTraining, sourceGroups]);
+  const asyncTrainGroupKey = asyncTrainGroup?.key ?? '';
+
   const layoutViewCount = Math.max(1, Math.min(activeViewSlots.length || currentGroupSamples.length || 1, MAX_LAYOUT_VIEW_COUNT));
   const viewGridClasses = VIEW_GRID_CLASSES_BY_COUNT[layoutViewCount] ?? VIEW_GRID_CLASSES_BY_COUNT[MAX_LAYOUT_VIEW_COUNT];
   const alignmentCameraGridClasses =
@@ -854,149 +852,7 @@ export default function DemoPage() {
     setAutoAdvancePending(false);
   }, [selectedDatasetId]);
 
-  useEffect(() => {
-    if (followTraining) {
-      if (latestTrainJob) {
-        setFollowTrainJobId(latestTrainJob.job_id);
-      }
-      return;
-    }
-    if (latestTrainJob?.status === 'running') {
-      setFollowTraining(true);
-      setFollowTrainJobId(latestTrainJob.job_id);
-      if (progressUpdatedAt === 0) {
-        const now = Date.now();
-        setProgressUpdatedAt(now);
-        setProgressWatchTs(now);
-      }
-      return;
-    }
-  }, [followTraining, latestTrainJob, progressUpdatedAt]);
-
-  useEffect(() => {
-    if (!followTraining || !followTrainJobId) {
-      return undefined;
-    }
-
-    let cancelled = false;
-    const readProgress = async () => {
-      if (document.visibilityState === 'hidden') {
-        return;
-      }
-      try {
-        const progress = await fetchJobProgress(followTrainJobId);
-        if (cancelled) {
-          return;
-        }
-        const progressValue = Number.isFinite(progress.progress) ? progress.progress : 0;
-        setFollowProgress(progressValue);
-        setFollowCurrentStep(Math.max(0, Number(progress.current_step) || 0));
-        setFollowTotalStep(Math.max(0, Number(progress.total_step) || 0));
-        const now = Date.now();
-        setProgressWatchTs(now);
-        if (progressValue >= progressValueRef.current + 0.001) {
-          progressValueRef.current = progressValue;
-          setProgressUpdatedAt(now);
-        }
-        if (progress.events.length > 0) {
-          const latestEvents = progress.events.slice(-4);
-          setTrainEvents(latestEvents);
-          setTrainHint(latestEvents[latestEvents.length - 1]);
-        }
-      } catch {
-        // ignore transient read errors
-      }
-    };
-
-    void readProgress();
-    const timer = window.setInterval(() => {
-      void readProgress();
-    }, 2500);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [followTraining, followTrainJobId]);
-
-  useEffect(() => {
-    if (!followTraining || !followTrainJobId) {
-      return;
-    }
-    const currentJob = jobs.find((item) => item.job_id === followTrainJobId);
-    if (!currentJob) {
-      return;
-    }
-    if (currentJob.status === 'failed') {
-      setFollowTraining(false);
-      setTrainHint(`训练失败：${followTrainJobId}`);
-      setTrainEvents([]);
-      return;
-    }
-
-    if (currentJob.status === 'succeeded') {
-      setFollowProgress(1);
-      setFollowCurrentStep((prev) => (followTotalStep > 0 ? followTotalStep : prev));
-      setFollowTraining(false);
-      setTrainHint(
-        syncReady
-          ? `训练完成：${followTrainJobId}，正在准备同步播放。`
-          : `训练完成：${followTrainJobId}，等待骨架加载完成后可播放。`,
-      );
-      progressValueRef.current = 1;
-      setProgressUpdatedAt(Date.now());
-      setProgressWatchTs(Date.now());
-      setPendingAutoPlayJobId(followTrainJobId);
-      return;
-    }
-
-  }, [followTotalStep, followTrainJobId, followTraining, handleSyncPlay, jobs, syncReady, syncSeekAll]);
-
-  const trainingStalled = useMemo(() => {
-    if (!followTraining || followProgress >= 0.999) {
-      return false;
-    }
-    if (progressUpdatedAt <= 0 || progressWatchTs <= 0) {
-      return false;
-    }
-    return progressWatchTs - progressUpdatedAt > TRAIN_PROGRESS_STALL_MS;
-  }, [followProgress, followTraining, progressUpdatedAt, progressWatchTs]);
-  const progressPercent = useMemo(() => {
-    const raw = Math.max(0, Math.min(100, followProgress * 100));
-    if (followTraining && raw < 1) {
-      return 2;
-    }
-    return raw;
-  }, [followProgress, followTraining]);
-  const progressTextPercent = useMemo(() => {
-    const raw = Math.max(0, Math.min(100, followProgress * 100));
-    if (followTraining && followCurrentStep > 0 && raw < 0.1) {
-      return 0.1;
-    }
-    return raw;
-  }, [followCurrentStep, followProgress, followTraining]);
-  const followStepLabel = useMemo(() => {
-    if (followTotalStep > 0) {
-      return `${Math.min(followCurrentStep, followTotalStep)}/${followTotalStep}`;
-    }
-    if (followTraining) {
-      return '等待批次指标';
-    }
-    return '-';
-  }, [followCurrentStep, followTotalStep, followTraining]);
-
-  useEffect(() => {
-    if (!latestTrainJob || latestTrainJob.status !== 'succeeded') {
-      return;
-    }
-    const shouldAutoPlay = followTrainJobId === latestTrainJob.job_id || followProgress > 0;
-    if (!shouldAutoPlay) {
-      return;
-    }
-    if (autoPlayedJobRef.current === latestTrainJob.job_id) {
-      return;
-    }
-    setPendingAutoPlayJobId(latestTrainJob.job_id);
-  }, [followProgress, followTrainJobId, latestTrainJob]);
+  // training follow 的 3 个 effect + 4 个 memo + autoPlay 检测由 useTrainingFollow hook 管理
 
 
   useEffect(() => {
@@ -1037,7 +893,6 @@ export default function DemoPage() {
     setAutoAdvancePending(false);
     setTrainSubmitting(true);
     setTrainHint('');
-    setTrainEvents([]);
     setPendingAutoPlayJobId('');
     autoPlayedJobRef.current = '';
     try {
@@ -1046,15 +901,7 @@ export default function DemoPage() {
         config: trainConfigPath,
         export_onnx: false,
       });
-      setFollowTraining(true);
-      setFollowTrainJobId(jobId);
-      setFollowProgress(0);
-      setFollowCurrentStep(0);
-      setFollowTotalStep(0);
-      progressValueRef.current = 0;
-      const now = Date.now();
-      setProgressUpdatedAt(now);
-      setProgressWatchTs(now);
+      startFollowing(jobId);
       setTrainHint(`训练任务已启动：${jobId}`);
       await refreshCore();
     } catch {

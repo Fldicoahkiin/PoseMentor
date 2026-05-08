@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchJobProgress, type JobItem } from '../lib/api';
 import { TRAIN_PROGRESS_STALL_MS } from '../lib/videoUtils';
 
@@ -18,6 +18,7 @@ export type TrainingFollowState = {
   followStepLabel: string;
   pendingAutoPlayJobId: string;
   setPendingAutoPlayJobId: (v: string) => void;
+  startFollowing: (jobId: string) => void;
 };
 
 export function useTrainingFollow(
@@ -169,6 +170,19 @@ export function useTrainingFollow(
     return '-';
   }, [followCurrentStep, followTotalStep, followTraining]);
 
+  const startFollowing = useCallback((jobId: string) => {
+    setFollowTraining(true);
+    setFollowTrainJobId(jobId);
+    setFollowProgress(0);
+    setFollowCurrentStep(0);
+    setFollowTotalStep(0);
+    setTrainEvents([]);
+    progressValueRef.current = 0;
+    const now = Date.now();
+    setProgressUpdatedAt(now);
+    setProgressWatchTs(now);
+  }, []);
+
   return {
     followTraining,
     setFollowTraining,
@@ -185,5 +199,6 @@ export function useTrainingFollow(
     followStepLabel,
     pendingAutoPlayJobId,
     setPendingAutoPlayJobId,
+    startFollowing,
   };
 }
