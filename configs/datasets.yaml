@@ -12,7 +12,7 @@ datasets:
   stage: active
   mode: singleview
   data_config: ''
-  train_config: configs/train.yaml
+  train_config: ''
   video_root: data/raw/custom_dance/videos
   notes: 非标准舞蹈练习视频，单机位混合场景，用于姿态提取和教学对比。
 - id: custom_multiview

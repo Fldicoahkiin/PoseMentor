@@ -57,9 +57,9 @@ const VIEW_GRID_CLASSES_BY_COUNT: Record<number, string> = {
   1: 'grid grid-cols-1 gap-3',
   2: 'grid grid-cols-1 gap-3 md:grid-cols-2',
   3: 'grid grid-cols-1 gap-3 md:grid-cols-3',
-  4: 'grid grid-cols-1 gap-3 md:grid-cols-2 2xl:grid-cols-4',
-  5: 'grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5',
-  6: 'grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6',
+  4: 'grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-2 2xl:grid-cols-3',
+  5: 'grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3',
+  6: 'grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3',
 };
 const ALIGNMENT_CAMERA_GRID_CLASSES_BY_COUNT: Record<number, string> = {
   1: 'grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2',
@@ -69,7 +69,7 @@ const ALIGNMENT_CAMERA_GRID_CLASSES_BY_COUNT: Record<number, string> = {
   5: 'grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5',
   6: 'grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6',
 };
-const THREE_D_PANEL_CLASS = 'flex h-full min-h-[0] flex-col rounded-xl border border-zinc-200 bg-stone-50 p-3 xl:sticky xl:top-4';
+const THREE_D_PANEL_CLASS = 'flex min-h-[0] flex-col justify-center rounded-xl border border-zinc-200 bg-stone-50 p-3 xl:sticky xl:top-4 xl:max-h-[calc(100vh-8rem)]';
 
 function toStepStatus(jobStatus: string | undefined): StepStatus {
   if (jobStatus === 'running') {
@@ -1073,23 +1073,21 @@ export default function DemoPage() {
               <div className="space-y-3">
                 <div className={viewGridClasses}>
                   {viewSlots.map((slot, index) => (
-                    <div key={`source-${slot.sample?.path || `empty-${slot.cameraLabel}`}`} className="rounded-xl border border-zinc-200 bg-stone-50 p-2.5 shadow-sm">
-                      <div className="mb-1.5 space-y-1.5">
-                        <h3 className="text-[13px] font-semibold leading-5 text-zinc-800">
-                          素材 {index + 1} · {slot.cameraLabel}
-                        </h3>
-                        <div className="flex min-h-[24px] flex-wrap items-center gap-1.5">
-                          {slot.currentCamera && (
-                            <>
-                              <span className="inline-flex rounded-md border border-zinc-200 bg-white px-1.5 py-0.5 text-[11px] text-zinc-600">
-                                offset {formatFrameOffset(slot.currentCamera.offset_frames)}
-                              </span>
-                              <span className="inline-flex rounded-md border border-zinc-200 bg-white px-1.5 py-0.5 text-[11px] text-zinc-600">
-                                trim {slot.currentCamera.trim_start}
-                              </span>
-                            </>
-                          )}
-                        </div>
+                    <div key={`source-${slot.sample?.path || `empty-${slot.cameraLabel}`}`} className="overflow-hidden rounded-lg border border-zinc-200 bg-stone-50 shadow-sm">
+                      <div className="flex items-center gap-1.5 px-2 py-1">
+                        <span className="text-[11px] font-semibold text-zinc-700">
+                          {slot.cameraLabel}
+                        </span>
+                        {slot.currentCamera && (
+                          <>
+                            <span className="text-[10px] text-zinc-400">
+                              {formatFrameOffset(slot.currentCamera.offset_frames)}
+                            </span>
+                            <span className="text-[10px] text-zinc-400">
+                              t{slot.currentCamera.trim_start}
+                            </span>
+                          </>
+                        )}
                       </div>
                       {slot.sourceVideoUrl ? (
                         <video
@@ -1127,13 +1125,13 @@ export default function DemoPage() {
                               handleMasterEnded();
                             }
                           }}
-                          className="aspect-video w-full rounded-lg border border-zinc-200 bg-stone-100 object-contain shadow-inner"
+                          className="aspect-video max-h-[360px] w-full rounded-lg border border-zinc-200 bg-stone-100 object-contain shadow-inner"
                         >
                           <source src={slot.sourceVideoUrl} type="video/mp4" />
                           当前浏览器无法播放视频，请检查编解码格式。
                         </video>
                       ) : (
-                        <div className="flex aspect-video w-full items-center justify-center rounded-lg border border-dashed border-zinc-300 bg-white px-3 text-sm text-zinc-500">
+                        <div className="flex aspect-video max-h-[360px] w-full items-center justify-center rounded-lg border border-dashed border-zinc-300 bg-white px-3 text-sm text-zinc-500">
                           {previewLoading ? '正在加载素材...' : '当前分组无该视角素材'}
                         </div>
                       )}
@@ -1143,18 +1141,16 @@ export default function DemoPage() {
 
                 <div className={viewGridClasses}>
                   {viewSlots.map((slot, index) => (
-                    <div key={`pose2d-${slot.sample?.path || `empty-${slot.cameraLabel}`}`} className="rounded-xl border border-zinc-200 bg-stone-50 p-2.5 shadow-sm">
-                      <div className="mb-1.5 space-y-1.5">
-                        <h3 className="text-[13px] font-semibold leading-5 text-zinc-800">
-                          2D骨架 {index + 1} · {slot.cameraLabel}
-                        </h3>
-                        <div className="min-h-[24px]">
-                          {slot.currentCamera && (
-                            <span className="inline-flex rounded-md border border-zinc-200 bg-white px-1.5 py-0.5 text-[11px] text-zinc-600">
-                              误差 {formatDecimal(slot.currentCamera.sync_error_px, 1)} px
-                            </span>
-                          )}
-                        </div>
+                    <div key={`pose2d-${slot.sample?.path || `empty-${slot.cameraLabel}`}`} className="overflow-hidden rounded-lg border border-zinc-200 bg-stone-50 shadow-sm">
+                      <div className="flex items-center gap-1.5 px-2 py-1">
+                        <span className="text-[11px] font-semibold text-zinc-700">
+                          2D · {slot.cameraLabel}
+                        </span>
+                        {slot.currentCamera && (
+                          <span className="text-[10px] text-zinc-400">
+                            {formatDecimal(slot.currentCamera.sync_error_px, 1)}px
+                          </span>
+                        )}
                       </div>
                       <Pose2DViewport
                         key={slot.pose2dDataUrl || slot.sample?.path || `pose2d-${index}`}
@@ -1162,7 +1158,7 @@ export default function DemoPage() {
                         currentTime={syncCurrentTime}
                         playing={syncPlaying}
                         videoElement={slot.sample ? sourceVideoRefs.current[slot.sample.path] ?? null : null}
-                        className="aspect-video w-full"
+                        className="aspect-video max-h-[320px] w-full"
                         emptyText={posePreviewLoading ? '正在载入 2D 预览...' : '当前视角暂无 2D 骨架'}
                       />
                     </div>
@@ -1188,7 +1184,7 @@ export default function DemoPage() {
                   dataUrl={syncPose3dDataUrl}
                   currentTime={syncCurrentTime}
                   playing={syncPlaying}
-                  className="min-h-[420px] flex-1 xl:min-h-0"
+                  className="min-h-[320px] max-h-[480px] flex-1 xl:min-h-0"
                   emptyText={
                     posePreviewLoading
                       ? '正在载入 3D 预览...'

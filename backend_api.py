@@ -1039,40 +1039,35 @@ def workspace_pose_preview(
     )
     if aist_preview_payload is not None:
         return aist_preview_payload
-    if not yolo_dir.exists() or not gt_dir.exists():
-        detail = (
-            "2D/3D 数据目录不存在: "
-            f"yolo2d={_to_project_relative(yolo_dir)} "
-            f"gt3d={_to_project_relative(gt_dir)}"
+    # 尝试查找 3D GT 数据；自定义视频可能没有，此时仅返回 2D 预览
+    has_gt3d = False
+    joints3d: np.ndarray | None = None
+    gt_file: Path | None = None
+    gt_seq_id: str = ""
+    fallback_seq_id = ""
+    if yolo_dir.exists() and gt_dir.exists():
+        fallback_seq_id = find_sequence_id(
+            yolo2d_dir=yolo_dir,
+            video_stem=source_stem,
+            source_video_name=source_name,
+            source_video_rel=source_video_rel,
         )
-        raise HTTPException(
-            status_code=400,
-            detail=detail,
+        gt_seq_id = _resolve_existing_gt_seq_id(
+            gt_dir=gt_dir,
+            candidates=[
+                source_seq_id,
+                source_stem,
+                CAMERA_TOKEN_PATTERN.sub("_cAll_", source_stem),
+                fallback_seq_id,
+                CAMERA_TOKEN_PATTERN.sub("_cAll_", fallback_seq_id) if fallback_seq_id else "",
+            ],
         )
-
-    fallback_seq_id = find_sequence_id(
-        yolo2d_dir=yolo_dir,
-        video_stem=source_stem,
-        source_video_name=source_name,
-        source_video_rel=source_video_rel,
-    )
-    gt_seq_id = _resolve_existing_gt_seq_id(
-        gt_dir=gt_dir,
-        candidates=[
-            source_seq_id,
-            source_stem,
-            CAMERA_TOKEN_PATTERN.sub("_cAll_", source_stem),
-            fallback_seq_id,
-            CAMERA_TOKEN_PATTERN.sub("_cAll_", fallback_seq_id) if fallback_seq_id else "",
-        ],
-    )
-    if not gt_seq_id:
-        raise HTTPException(status_code=404, detail=f"未找到视频对应 3D 序列: {source_name}")
-    gt_file = gt_dir / f"{gt_seq_id}.npz"
-    if not gt_file.exists():
-        raise HTTPException(status_code=404, detail=f"未找到 3D 文件: seq_id={gt_seq_id}")
-    with np.load(gt_file) as gt_data:
-        joints3d = gt_data["joints3d"].astype(np.float32)
+        if gt_seq_id:
+            gt_file = gt_dir / f"{gt_seq_id}.npz"
+            if gt_file.exists():
+                with np.load(gt_file) as gt_data:
+                    joints3d = gt_data["joints3d"].astype(np.float32)
+                has_gt3d = True
 
     preview_pose_cache_dir = ensure_dir(OUTPUT_ROOT / "preview_cache" / dataset_id / "pose2d_npz")
     source_pose2d_cache = preview_pose_cache_dir / f"{source_seq_id}.npz"
@@ -1128,42 +1123,53 @@ def workspace_pose_preview(
     source_height = int(source_cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 540)
     source_cap.release()
     source_mtime = source_video.stat().st_mtime_ns
-    dep_mtime = max(
-        pose2d_dep_file.stat().st_mtime_ns,
-        gt_file.stat().st_mtime_ns,
-        source_mtime,
-        _preview_pipeline_mtime_ns(),
-    )
-    need_render = bool(refresh)
-    if not (output_source.exists() and output_2d.exists() and output_3d.exists()):
-        need_render = True
-    else:
-        output_mtime = min(
-            output_source.stat().st_mtime_ns,
-            output_2d.stat().st_mtime_ns,
-            output_3d.stat().st_mtime_ns,
-        )
-        if not need_render:
-            need_render = output_mtime < dep_mtime
-        if not need_render:
-            need_render = not all(
-                _preview_video_cache_valid(path)
-                for path in (output_source, output_2d, output_3d)
-            )
+    dep_mtime_parts = [pose2d_dep_file.stat().st_mtime_ns, source_mtime, _preview_pipeline_mtime_ns()]
+    if gt_file is not None and gt_file.exists():
+        dep_mtime_parts.append(gt_file.stat().st_mtime_ns)
+    dep_mtime = max(dep_mtime_parts)
 
+    # 检查需要渲染的输出文件列表（无 3D GT 时跳过 3D 视频）
+    required_outputs = [output_source, output_2d]
+    if has_gt3d:
+        required_outputs.append(output_3d)
+
+    need_render = bool(refresh)
+    if not all(p.exists() for p in required_outputs):
+        need_render = True
+    elif not need_render:
+        output_mtime = min(p.stat().st_mtime_ns for p in required_outputs)
+        if output_mtime < dep_mtime:
+            need_render = True
+        elif not all(_preview_video_cache_valid(p) for p in required_outputs):
+            need_render = True
+
+    frame_count = len(keypoints2d) if joints3d is None else min(len(keypoints2d), len(joints3d))
     stats: dict[str, float] = {
         "fps": max(0.0, fps_value),
-        "frames": float(min(len(keypoints2d), len(joints3d))),
+        "frames": float(frame_count),
     }
     if need_render:
-        stats = render_pose_preview_videos(
-            source_video=source_video,
-            keypoints2d=keypoints2d,
-            joints3d=joints3d,
-            output_source=output_source,
-            output_2d=output_2d,
-            output_3d=output_3d,
-        )
+        if has_gt3d and joints3d is not None:
+            stats = render_pose_preview_videos(
+                source_video=source_video,
+                keypoints2d=keypoints2d,
+                joints3d=joints3d,
+                output_source=output_source,
+                output_2d=output_2d,
+                output_3d=output_3d,
+            )
+        else:
+            # 无 3D GT 数据时：渲染 source + 2D，用零占位跳过 3D
+            dummy_3d = np.zeros((len(keypoints2d), keypoints2d.shape[1], 3), dtype=np.float32)
+            render_pose_preview_videos(
+                source_video=source_video,
+                keypoints2d=keypoints2d,
+                joints3d=dummy_3d,
+                output_source=output_source,
+                output_2d=output_2d,
+                output_3d=output_3d,
+            )
+            stats = {"fps": max(0.0, fps_value), "frames": float(len(keypoints2d))}
 
     expected_frame_total = int(stats["frames"])
     need_export_pose2d_data = bool(refresh) or not output_2d_data.exists()
@@ -1196,65 +1202,62 @@ def workspace_pose_preview(
             encoding="utf-8",
         )
 
-    need_export_pose3d_data = bool(refresh) or not output_3d_data.exists()
-    if output_3d_data.exists() and not need_export_pose3d_data:
-        need_export_pose3d_data = output_3d_data.stat().st_mtime_ns < dep_mtime
-    if output_3d_data.exists() and not need_export_pose3d_data:
-        try:
-            pose3d_meta = json.loads(output_3d_data.read_text(encoding="utf-8"))
-            need_export_pose3d_data = any(
-                [
-                    int(pose3d_meta.get("preview_version", 0)) != POSE3D_PREVIEW_VERSION,
-                    int(pose3d_meta.get("frame_count", -1)) != expected_frame_total,
-                    int(pose3d_meta.get("joint_count", -1)) != int(joints3d.shape[1]),
-                ]
+    if has_gt3d and joints3d is not None:
+        need_export_pose3d_data = bool(refresh) or not output_3d_data.exists()
+        if output_3d_data.exists() and not need_export_pose3d_data:
+            need_export_pose3d_data = output_3d_data.stat().st_mtime_ns < dep_mtime
+        if output_3d_data.exists() and not need_export_pose3d_data:
+            try:
+                pose3d_meta = json.loads(output_3d_data.read_text(encoding="utf-8"))
+                need_export_pose3d_data = any(
+                    [
+                        int(pose3d_meta.get("preview_version", 0)) != POSE3D_PREVIEW_VERSION,
+                        int(pose3d_meta.get("frame_count", -1)) != expected_frame_total,
+                        int(pose3d_meta.get("joint_count", -1)) != int(joints3d.shape[1]),
+                    ]
+                )
+            except Exception:  # noqa: BLE001
+                logger.debug("pose3d 缓存元数据校验失败，将重新导出", exc_info=True)
+                need_export_pose3d_data = True
+        if need_export_pose3d_data or need_render:
+            pose3d_data = build_pose3d_preview_data(
+                joints3d=joints3d,
+                fps=float(stats["fps"]),
+                frame_total=expected_frame_total,
             )
-        except Exception:  # noqa: BLE001
-            logger.debug("pose3d 缓存元数据校验失败，将重新导出", exc_info=True)
-            need_export_pose3d_data = True
-    if need_export_pose3d_data or need_render:
-        pose3d_data = build_pose3d_preview_data(
-            joints3d=joints3d,
-            fps=float(stats["fps"]),
-            frame_total=expected_frame_total,
-        )
-        output_3d_data.write_text(
-            json.dumps(pose3d_data, ensure_ascii=False, separators=(",", ":")),
-            encoding="utf-8",
-        )
+            output_3d_data.write_text(
+                json.dumps(pose3d_data, ensure_ascii=False, separators=(",", ":")),
+                encoding="utf-8",
+            )
 
     source_video_url = f"/data-files/{rel_data_video.as_posix()}"
     if output_source.exists():
         source_video_url = f"/outputs-files/preview_cache/{dataset_id}/{output_source.name}"
 
-    cache_key = str(
-        int(
-            max(
-                (
-                    output_source.stat().st_mtime_ns
-                    if output_source.exists()
-                    else source_video.stat().st_mtime_ns
-                ),
-                output_2d.stat().st_mtime_ns,
-                output_2d_data.stat().st_mtime_ns,
-                output_3d.stat().st_mtime_ns,
-                output_3d_data.stat().st_mtime_ns,
-            )
-        )
-    )
+    cache_mtime_parts = [
+        output_source.stat().st_mtime_ns if output_source.exists() else source_video.stat().st_mtime_ns,
+        output_2d.stat().st_mtime_ns if output_2d.exists() else 0,
+        output_2d_data.stat().st_mtime_ns if output_2d_data.exists() else 0,
+    ]
+    if output_3d.exists():
+        cache_mtime_parts.append(output_3d.stat().st_mtime_ns)
+    if output_3d_data.exists():
+        cache_mtime_parts.append(output_3d_data.stat().st_mtime_ns)
+    cache_key = str(int(max(cache_mtime_parts)))
 
-    return {
+    result: dict[str, object] = {
         "dataset_id": dataset_id,
-        "seq_id": gt_seq_id,
+        "seq_id": gt_seq_id if has_gt3d else source_seq_id,
         "source_video_url": source_video_url,
         "pose2d_video_url": f"/outputs-files/preview_cache/{dataset_id}/{output_2d.name}",
         "pose2d_data_url": f"/outputs-files/preview_cache/{dataset_id}/{output_2d_data.name}",
-        "pose3d_video_url": f"/outputs-files/preview_cache/{dataset_id}/{output_3d.name}",
-        "pose3d_data_url": f"/outputs-files/preview_cache/{dataset_id}/{output_3d_data.name}",
+        "pose3d_video_url": f"/outputs-files/preview_cache/{dataset_id}/{output_3d.name}" if has_gt3d else "",
+        "pose3d_data_url": f"/outputs-files/preview_cache/{dataset_id}/{output_3d_data.name}" if has_gt3d else "",
         "cache_key": cache_key,
         "fps": stats["fps"],
         "frames": stats["frames"],
     }
+    return result
 
 
 @router.post("/datasets/upsert")
