@@ -39,7 +39,11 @@ def compute_angle_error_deg(pred3d: np.ndarray, ref3d: np.ndarray) -> float:
     ref_angle = compute_angle_dict(ref3d)
     all_err: list[float] = []
     for name in pred_angle:
-        all_err.extend(np.abs(pred_angle[name] - ref_angle[name]).tolist())
+        diff = np.abs(pred_angle[name] - ref_angle[name])
+        # 过滤 NaN（退化几何如共线点时 arccos 可能产生）
+        finite_diff = diff[np.isfinite(diff)]
+        if finite_diff.size > 0:
+            all_err.extend(finite_diff.tolist())
     return float(np.mean(all_err)) if all_err else 0.0
 
 

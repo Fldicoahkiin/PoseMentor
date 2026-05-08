@@ -1,12 +1,6 @@
 import { useMemo } from 'react';
 import type { SourcePreviewItem, SourcePreviewPayload } from '../lib/api';
-
-const CAMERA_TOKEN_PATTERN = /_c(\d+)_/i;
-
-function normalizeSequenceKey(pathValue: string): string {
-  const name = pathValue.split('/').at(-1) ?? pathValue;
-  return name.replace(/\.mp4$/i, '').replace(CAMERA_TOKEN_PATTERN, '_cAll_');
-}
+import { CAMERA_TOKEN_PATTERN, normalizeSequenceKey } from '../lib/videoUtils';
 
 export type SourceGroup = {
   key: string;

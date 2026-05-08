@@ -3,12 +3,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import re
 import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 import cv2
 import numpy as np
@@ -102,6 +105,16 @@ def _validate_optional_safe_path(value: str | None, field_name: str) -> str | No
     return _validate_safe_path(value, field_name)
 
 
+def _check_dataset_id(v: str) -> str:
+    if not DATASET_ID_PATTERN.match(v):
+        raise ValueError("dataset_id 格式非法")
+    return v
+
+
+def _check_config(v: str) -> str:
+    return _validate_safe_path(v, "config")
+
+
 class DataPrepareRequest(BaseModel):
     dataset_id: str = "aistpp"
     config: str = "configs/data.yaml"
@@ -112,17 +125,8 @@ class DataPrepareRequest(BaseModel):
     agree_license: bool = False
     preprocess_limit: int = 0
 
-    @field_validator("dataset_id")
-    @classmethod
-    def check_dataset_id(cls, v: str) -> str:
-        if not DATASET_ID_PATTERN.match(v):
-            raise ValueError("dataset_id 格式非法")
-        return v
-
-    @field_validator("config")
-    @classmethod
-    def check_config(cls, v: str) -> str:
-        return _validate_safe_path(v, "config")
+    check_dataset_id = field_validator("dataset_id")(_check_dataset_id)
+    check_config = field_validator("config")(_check_config)
 
 
 class ExtractRequest(BaseModel):
@@ -136,17 +140,8 @@ class ExtractRequest(BaseModel):
     conf: float = 0.35
     max_videos: int = 0
 
-    @field_validator("dataset_id")
-    @classmethod
-    def check_dataset_id(cls, v: str) -> str:
-        if not DATASET_ID_PATTERN.match(v):
-            raise ValueError("dataset_id 格式非法")
-        return v
-
-    @field_validator("config")
-    @classmethod
-    def check_config(cls, v: str) -> str:
-        return _validate_safe_path(v, "config")
+    check_dataset_id = field_validator("dataset_id")(_check_dataset_id)
+    check_config = field_validator("config")(_check_config)
 
     @field_validator("input_dir")
     @classmethod
@@ -179,17 +174,8 @@ class TrainRequest(BaseModel):
     artifact_dir: str | None = None
     export_onnx: bool = False
 
-    @field_validator("dataset_id")
-    @classmethod
-    def check_dataset_id(cls, v: str) -> str:
-        if not DATASET_ID_PATTERN.match(v):
-            raise ValueError("dataset_id 格式非法")
-        return v
-
-    @field_validator("config")
-    @classmethod
-    def check_config(cls, v: str) -> str:
-        return _validate_safe_path(v, "config")
+    check_dataset_id = field_validator("dataset_id")(_check_dataset_id)
+    check_config = field_validator("config")(_check_config)
 
     @field_validator("yolo2d_dir", "gt3d_dir", "artifact_dir")
     @classmethod
@@ -201,10 +187,7 @@ class MultiViewRequest(BaseModel):
     config: str = "configs/multiview.yaml"
     limit_sessions: int = 0
 
-    @field_validator("config")
-    @classmethod
-    def check_config(cls, v: str) -> str:
-        return _validate_safe_path(v, "config")
+    check_config = field_validator("config")(_check_config)
 
 
 class MultiViewTriangulateRequest(BaseModel):
@@ -212,10 +195,7 @@ class MultiViewTriangulateRequest(BaseModel):
     calibration: str | None = None
     limit_sessions: int = 0
 
-    @field_validator("config")
-    @classmethod
-    def check_config(cls, v: str) -> str:
-        return _validate_safe_path(v, "config")
+    check_config = field_validator("config")(_check_config)
 
     @field_validator("calibration")
     @classmethod
@@ -230,12 +210,7 @@ class EvaluateRequest(BaseModel):
     max_videos: int = 10
     output_csv: str = "outputs/eval/summary.csv"
 
-    @field_validator("dataset_id")
-    @classmethod
-    def check_dataset_id(cls, v: str) -> str:
-        if not DATASET_ID_PATTERN.match(v):
-            raise ValueError("dataset_id 格式非法")
-        return v
+    check_dataset_id = field_validator("dataset_id")(_check_dataset_id)
 
     @field_validator("input_dir", "output_csv")
     @classmethod
@@ -635,15 +610,13 @@ def _preview_video_cache_valid(video_path: Path) -> bool:
 
 
 def _get_preview_pose_model():
-    global _preview_pose_model
-    if _preview_pose_model is not None:
-        return _preview_pose_model
+    global _preview_pose_model  # noqa: PLW0603
     with _preview_pose_model_lock:
         if _preview_pose_model is None:
             from ultralytics import YOLO
 
             _preview_pose_model = YOLO(PREVIEW_YOLO_WEIGHTS)
-    return _preview_pose_model
+        return _preview_pose_model
 
 
 def _extract_pose2d_from_video(video_path: Path) -> tuple[np.ndarray, float]:
@@ -664,6 +637,9 @@ def _extract_pose2d_from_video(video_path: Path) -> tuple[np.ndarray, float]:
             continue
         kp_xy = result.keypoints.xy.cpu().numpy()
         kp_conf = result.keypoints.conf.cpu().numpy()
+        if kp_conf.shape[0] == 0:
+            frames.append(np.zeros((17, 3), dtype=np.float32))
+            continue
         person_idx = int(np.argmax(kp_conf.mean(axis=1)))
         kp = np.concatenate([kp_xy[person_idx], kp_conf[person_idx, :, None]], axis=-1)
         frames.append(kp.astype(np.float32))
@@ -829,7 +805,8 @@ def _workspace_pose_preview_aist(
                         int(pose2d_meta.get("frame_height", -1)) != source_height,
                     ]
                 )
-            except Exception:
+            except Exception:  # noqa: BLE001
+                logger.debug("pose2d 缓存元数据校验失败，将重新导出", exc_info=True)
                 need_export_pose2d_data = True
         if need_export_pose2d_data or need_render:
             pose2d_data = build_pose2d_preview_data(
@@ -857,7 +834,8 @@ def _workspace_pose_preview_aist(
                         int(pose3d_meta.get("joint_count", -1)) != int(joints3d_view.shape[1]),
                     ]
                 )
-            except Exception:
+            except Exception:  # noqa: BLE001
+                logger.debug("pose3d 缓存元数据校验失败，将重新导出", exc_info=True)
                 need_export_pose3d_data = True
         if need_export_pose3d_data or need_render:
             pose3d_data = build_pose3d_preview_data(
@@ -1202,7 +1180,8 @@ def workspace_pose_preview(
                     int(pose2d_meta.get("frame_height", -1)) != source_height,
                 ]
             )
-        except Exception:
+        except Exception:  # noqa: BLE001
+            logger.debug("pose2d 缓存元数据校验失败，将重新导出", exc_info=True)
             need_export_pose2d_data = True
     if need_export_pose2d_data or need_render:
         pose2d_data = build_pose2d_preview_data(
@@ -1230,7 +1209,8 @@ def workspace_pose_preview(
                     int(pose3d_meta.get("joint_count", -1)) != int(joints3d.shape[1]),
                 ]
             )
-        except Exception:
+        except Exception:  # noqa: BLE001
+            logger.debug("pose3d 缓存元数据校验失败，将重新导出", exc_info=True)
             need_export_pose3d_data = True
     if need_export_pose3d_data or need_render:
         pose3d_data = build_pose3d_preview_data(

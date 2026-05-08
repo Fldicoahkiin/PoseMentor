@@ -107,7 +107,10 @@ def _solve_dlt(observations: list[Observation], rig: CalibrationRig) -> np.ndarr
     if len(rows) < 4:
         return None
     design = np.stack(rows, axis=0)
-    _, _, vh = np.linalg.svd(design, full_matrices=False)
+    _, s, vh = np.linalg.svd(design, full_matrices=False)
+    # 条件数检查：最小奇异值应远小于最大值，否则解不可靠
+    if len(s) < 4 or s[0] < 1e-12 or s[-1] / s[0] > 0.1:
+        return None
     point_h = vh[-1]
     if abs(float(point_h[3])) < 1e-6:
         return None

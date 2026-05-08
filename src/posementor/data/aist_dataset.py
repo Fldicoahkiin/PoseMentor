@@ -105,7 +105,7 @@ class AISTLiftDataset(Dataset[dict[str, object]]):
         conf = np.nan_to_num(conf, nan=0.0, posinf=0.0, neginf=0.0)
         conf = np.clip(conf, 0.0, 1.0) * valid3d
 
-        kp2d = (kp2d - self.mean_2d) / self.std_2d
+        kp2d = (kp2d - self.mean_2d) / np.clip(self.std_2d, 1e-6, None)
 
         return {
             "kp2d": torch.from_numpy(kp2d),

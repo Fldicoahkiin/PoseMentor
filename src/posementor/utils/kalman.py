@@ -21,7 +21,8 @@ class KalmanFilter1D:
         # 更新
         k = self.p / (self.p + self.measure_var)
         self.x = self.x + k * (z - self.x)
-        self.p = (1.0 - k) * self.p
+        # p 下界防止长视频中浮点累积导致滤波器"锁死"
+        self.p = max((1.0 - k) * self.p, self.process_var * 0.01)
         return self.x
 
 

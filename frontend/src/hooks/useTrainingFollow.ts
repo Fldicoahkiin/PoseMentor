@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { fetchJobProgress, type JobItem } from '../lib/api';
-
-const TRAIN_PROGRESS_STALL_MS = 20_000;
+import { TRAIN_PROGRESS_STALL_MS } from '../lib/videoUtils';
 
 export type TrainingFollowState = {
   followTraining: boolean;

@@ -1,60 +1,12 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react';
-
-const SYNC_DRIFT_TOLERANCE = 0.05;
-const SYNC_TICK_MS = 40;
-const SYNC_PAUSE_SETTLE_MS = 72;
-
-function seekVideo(video: HTMLVideoElement, timeSeconds: number): void {
-  try {
-    if (typeof video.fastSeek === 'function') {
-      video.fastSeek(timeSeconds);
-      return;
-    }
-  } catch {
-    // fastSeek 失败时回退为 currentTime 赋值
-  }
-  video.currentTime = timeSeconds;
-}
-
-function pickMedian(values: number[], fallback = 0): number {
-  const ordered = values.filter((value) => Number.isFinite(value)).sort((left, right) => left - right);
-  if (ordered.length === 0) {
-    return fallback;
-  }
-  const middle = Math.floor(ordered.length / 2);
-  if (ordered.length % 2 === 1) {
-    return ordered[middle] ?? fallback;
-  }
-  const left = ordered[middle - 1] ?? fallback;
-  const right = ordered[middle] ?? fallback;
-  return (left + right) / 2;
-}
-
-function waitForVideoPlayable(video: HTMLVideoElement, timeoutMs = 4000): Promise<void> {
-  if (video.readyState >= 2) {
-    return Promise.resolve();
-  }
-  return new Promise((resolve) => {
-    let done = false;
-    let timerId = 0;
-    const cleanup = () => {
-      video.removeEventListener('loadeddata', finish);
-      video.removeEventListener('canplay', finish);
-      video.removeEventListener('error', finish);
-      window.clearTimeout(timerId);
-    };
-    const finish = () => {
-      if (done) return;
-      done = true;
-      cleanup();
-      resolve();
-    };
-    timerId = window.setTimeout(finish, timeoutMs);
-    video.addEventListener('loadeddata', finish, { once: true });
-    video.addEventListener('canplay', finish, { once: true });
-    video.addEventListener('error', finish, { once: true });
-  });
-}
+import {
+  SYNC_DRIFT_TOLERANCE,
+  SYNC_TICK_MS,
+  SYNC_PAUSE_SETTLE_MS,
+  seekVideo,
+  pickMedian,
+  waitForVideoPlayable,
+} from '../lib/videoUtils';
 
 export type SyncPlaybackControls = {
   syncPlaying: boolean;

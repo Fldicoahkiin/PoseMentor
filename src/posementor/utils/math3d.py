@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 
 from posementor.utils.joints import ANGLE_DEFS, JOINT_NAMES
+
+logger = logging.getLogger(__name__)
 
 
 def safe_norm(vec: np.ndarray, eps: float = 1e-8) -> np.ndarray:
@@ -26,30 +30,41 @@ def compute_angle_dict(points3d: np.ndarray) -> dict[str, np.ndarray]:
     return angles
 
 
+def _auto_detect_unit_scale(mean_err: float) -> float:
+    """根据误差量级推断单位：<10 视为米制需乘 1000，否则视为已是毫米。"""
+    # 阈值 10: AIST++ 米制数据 MPJPE 通常在 0.02~2.0m 之间
+    if mean_err < 10:
+        logger.debug("MPJPE=%.4f 推断为米制，乘以 1000 转换为 mm", mean_err)
+        return 1000.0
+    return 1.0
+
+
 def mpjpe(pred3d: np.ndarray, gt3d: np.ndarray, to_mm: bool = True) -> float:
     """Mean Per Joint Position Error，默认输出 mm。"""
     err = np.linalg.norm(pred3d - gt3d, axis=-1)
-    mean_err = float(np.mean(err))
+    mean_err = float(np.nanmean(err))
+    if not np.isfinite(mean_err):
+        logger.warning("MPJPE 计算结果非有限值 (NaN/Inf)，返回 0.0")
+        return 0.0
     if not to_mm:
         return mean_err
-
-    # AIST++ 常见单位为米，若值明显过大则视为已是 mm。
-    if mean_err < 10:
-        return mean_err * 1000.0
-    return mean_err
+    return mean_err * _auto_detect_unit_scale(mean_err)
 
 
 def per_joint_error_mm(pred3d: np.ndarray, gt3d: np.ndarray) -> np.ndarray:
     err = np.linalg.norm(pred3d - gt3d, axis=-1)
-    if float(np.mean(err)) < 10:
-        return err * 1000.0
-    return err
+    scale = _auto_detect_unit_scale(float(np.nanmean(err)))
+    return err * scale
+
+
+_LEFT_HIP_IDX = JOINT_NAMES.index("left_hip")
+_RIGHT_HIP_IDX = JOINT_NAMES.index("right_hip")
 
 
 def center_pose(points3d: np.ndarray) -> np.ndarray:
     """以髋中心对齐，降低相机平移误差影响。"""
-    left_hip = points3d[..., JOINT_NAMES.index("left_hip"), :]
-    right_hip = points3d[..., JOINT_NAMES.index("right_hip"), :]
+    left_hip = points3d[..., _LEFT_HIP_IDX, :]
+    right_hip = points3d[..., _RIGHT_HIP_IDX, :]
     root = (left_hip + right_hip) / 2.0
     return points3d - root[..., None, :]
 

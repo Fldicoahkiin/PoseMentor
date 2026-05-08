@@ -99,6 +99,8 @@ class JobRunner:
                 process.wait(timeout=self.job_timeout)
             except subprocess.TimeoutExpired:
                 process.kill()
+                if process.stdout is not None:
+                    process.stdout.close()
                 process.wait(timeout=10)
                 timeout_msg = f"作业超时（{self.job_timeout}s），已强制终止"
                 log_file.write(f"\n[ERROR] {timeout_msg}\n")
