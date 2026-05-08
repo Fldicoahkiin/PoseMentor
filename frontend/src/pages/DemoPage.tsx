@@ -51,6 +51,7 @@ import {
   pickMedian,
   waitForVideoPlayable,
 } from '../lib/videoUtils';
+import { useDatasetSelection } from '../hooks/useDatasetSelection';
 import { useSourceGroups } from '../hooks/useSourceGroups';
 
 type StepStatus = 'ready' | 'running' | 'waiting' | 'error';
@@ -122,9 +123,6 @@ export default function DemoPage() {
   const [posePreviewError, setPosePreviewError] = useState('');
   const [groupPrepareDone, setGroupPrepareDone] = useState(0);
   const [groupPrepareTotal, setGroupPrepareTotal] = useState(0);
-  const [selectedDatasetId, setSelectedDatasetId] = useState('');
-  const [selectedStandardId, setSelectedStandardId] = useState('');
-  const [selectedGroupKey, setSelectedGroupKey] = useState('');
   const [summaryText, setSummaryText] = useState('');
   const [syncCurrentTime, setSyncCurrentTime] = useState(0);
   const [syncDuration, setSyncDuration] = useState(0);
@@ -155,6 +153,14 @@ export default function DemoPage() {
   const syncUiUpdateAtRef = useRef(0);
   const syncPlayingRef = useRef(false);
   const syncPauseGuardRef = useRef(false);
+
+  const sourceGroups = useSourceGroups(sourcePreview);
+  const {
+    selectedDatasetId, setSelectedDatasetId,
+    selectedStandardId, setSelectedStandardId,
+    selectedGroupKey, setSelectedGroupKey,
+    selectedDataset, selectedStandard,
+  } = useDatasetSelection(datasets, standards, sourceGroups);
 
   const refreshCore = useCallback(async () => {
     setLoading(true);
@@ -215,22 +221,6 @@ export default function DemoPage() {
   }, [refreshCore]);
 
   useEffect(() => {
-    setSelectedDatasetId((prev) => {
-      if (datasets.length === 0) return '';
-      const exists = datasets.some((item) => item.id === prev);
-      return exists ? prev : datasets[0].id;
-    });
-  }, [datasets]);
-
-  useEffect(() => {
-    setSelectedStandardId((prev) => {
-      if (standards.length === 0) return '';
-      const exists = standards.some((item) => item.id === prev);
-      return exists ? prev : standards[0].id;
-    });
-  }, [standards]);
-
-  useEffect(() => {
     if (!selectedDatasetId) {
       return;
     }
@@ -269,15 +259,6 @@ export default function DemoPage() {
     }
     return { runningJobs: running, queuedJobs: queued, failedJobs: failed };
   }, [jobs]);
-
-  const selectedDataset = useMemo(
-    () => datasets.find((dataset) => dataset.id === selectedDatasetId) ?? null,
-    [datasets, selectedDatasetId],
-  );
-  const selectedStandard = useMemo(
-    () => standards.find((item) => item.id === selectedStandardId) ?? null,
-    [selectedStandardId, standards],
-  );
 
   const orderedJobs = useMemo(
     () => [...jobs].sort((left, right) => Number(right.created_at) - Number(left.created_at)),
@@ -332,19 +313,6 @@ export default function DemoPage() {
       },
     ] as { name: string; status: StepStatus; detail: string }[];
   }, [artifactManifest, latestJobByKeyword, selectedDataset?.mode, selectedDatasetId, sourcePreview]);
-
-  const sourceGroups = useSourceGroups(sourcePreview);
-
-  useEffect(() => {
-    setSelectedGroupKey((prev) => {
-      if (sourceGroups.length === 0) return '';
-      const exists = sourceGroups.some((group) => group.key === prev);
-      if (exists) return prev;
-      const defaultGroup =
-        [...sourceGroups].sort((left, right) => right.samples.length - left.samples.length)[0] ?? sourceGroups[0];
-      return defaultGroup.key;
-    });
-  }, [sourceGroups]);
 
   const markSourcePreviewGenerated = useCallback((samplePath: string) => {
     setSourcePreview((prev) => {
