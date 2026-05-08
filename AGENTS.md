@@ -30,8 +30,9 @@ src/posementor/
   utils/                    # I/O、关节定义、3D 数学、Kalman、评分、可视化、TTS
 frontend/src/
   pages/DemoPage.tsx        # 主工作台（训练数据浏览 + 多视角同步播放）
-  components/               # Pose2DViewport, Pose3DViewport
-  hooks/                    # useSyncPlayback, useTrainingFollow, usePosePreview 等
+  components/               # Pose2DViewport, Pose3DViewport, AlignmentInfoPanel
+  hooks/                    # useSyncPlayback, useTrainingFollow, usePosePreview, useDatasetSelection, useSourceGroups
+  lib/videoUtils.ts         # 公共辅助函数（seekVideo, pickMedian, formatBytes 等）
   lib/api.ts                # 后端 API 客户端和类型定义
 configs/                    # YAML 配置（data, train, infer, multiview, datasets, standards）
 tests/                      # pytest 测试
@@ -89,7 +90,7 @@ app.include_router(router, prefix="/api")
 所有 Pydantic Request Model 的路径字段通过 `_validate_safe_path` 校验：不以 `-` 开头、不含 `..`、仅允许安全字符。
 
 ### Frontend State Management
-DemoPage 主工作台状态已部分拆分为独立 hooks:
+DemoPage 主工作台状态已全部拆分为独立 hooks（2099 -> 1321 行，-37%）:
 - `useSyncPlayback` — 多视频同步播放、timer、seek
 - `useTrainingFollow` — 训练进度轮询、完成检测
 - `usePosePreview` — 骨架预览获取/缓存
