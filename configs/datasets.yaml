@@ -7,6 +7,14 @@ datasets:
   train_config: configs/train_ui_smoke.yaml
   video_root: data/raw/aistpp/videos
   notes: 默认数据源，已接入完整预处理与训练链路。
+- id: custom_dance
+  name: 自定义舞蹈素材
+  stage: active
+  mode: singleview
+  data_config: ''
+  train_config: configs/train.yaml
+  video_root: data/raw/custom_dance/videos
+  notes: 非标准舞蹈练习视频，单机位混合场景，用于姿态提取和教学对比。
 - id: custom_multiview
   name: Custom FourView
   stage: planned
