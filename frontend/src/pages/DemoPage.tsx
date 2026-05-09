@@ -227,8 +227,12 @@ export default function DemoPage() {
     [jobs],
   );
   const latestTrainJob = useMemo(
-    () => orderedJobs.find((item) => item.name.includes(`train_3d_lift_${selectedDatasetId}`)) ?? null,
-    [orderedJobs, selectedDatasetId],
+    () => {
+      // 推理数据集不跟踪训练，避免锁住播放
+      if (selectedDataset?.stage === 'inference') return null;
+      return orderedJobs.find((item) => item.name.includes(`train_3d_lift_${selectedDatasetId}`)) ?? null;
+    },
+    [orderedJobs, selectedDataset?.stage, selectedDatasetId],
   );
 
   const latestJobByKeyword = useCallback(
@@ -748,10 +752,12 @@ export default function DemoPage() {
                   <RefreshCw size={16} className={regeneratingPose ? 'animate-spin' : ''} />
                   重新解析当前组
                 </Button>
-                <Button onClick={() => void handleStartTraining()} disabled={trainSubmitting || !selectedDatasetId} className="gap-2">
-                  <LoaderCircle size={16} className={trainSubmitting ? 'animate-spin' : ''} />
-                  开始训练
-                </Button>
+                {selectedDataset?.stage !== 'inference' && (
+                  <Button onClick={() => void handleStartTraining()} disabled={trainSubmitting || !selectedDatasetId} className="gap-2">
+                    <LoaderCircle size={16} className={trainSubmitting ? 'animate-spin' : ''} />
+                    开始训练
+                  </Button>
+                )}
               </div>
             </div>
             <SourceGroupSelector
@@ -874,7 +880,7 @@ export default function DemoPage() {
                         playing={syncPlaying}
                         videoElement={slot.sample ? sourceVideoRefs.current[slot.sample.path] ?? null : null}
                         className="aspect-video max-h-[320px] w-full"
-                        emptyText={posePreviewLoading ? '正在载入 2D 预览...' : '当前视角暂无 2D 骨架'}
+                        emptyText={posePreviewLoading && slot.pose2dDataUrl ? '正在载入 2D 预览...' : '点击「当前预览」生成骨架'}
                       />
                     </div>
                   ))}
@@ -901,11 +907,9 @@ export default function DemoPage() {
                   playing={syncPlaying}
                   className="min-h-[320px] max-h-[480px] flex-1 xl:min-h-0"
                   emptyText={
-                    posePreviewLoading
+                    posePreviewLoading && syncPose3dDataUrl
                       ? '正在载入 3D 预览...'
-                      : followTraining && asyncTrainGroup?.label
-                        ? `当前分组暂无 3D 骨架，正在训练：${asyncTrainGroup.label}`
-                        : '当前分组暂无 3D 骨架'
+                      : '点击「当前预览」生成 3D 骨架'
                   }
                 />
               </div>
