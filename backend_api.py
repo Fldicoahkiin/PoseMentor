@@ -688,16 +688,58 @@ def _try_infer_3d_from_model(
         return None
 
 
+def _person_centroid(kp: np.ndarray, conf_thresh: float = 0.3) -> np.ndarray:
+    """计算单人关键点质心，用于跨帧追踪。"""
+    valid = kp[kp[:, 2] > conf_thresh, :2] if kp.shape[-1] >= 3 else kp[:, :2]
+    return valid.mean(axis=0) if len(valid) > 0 else kp[:, :2].mean(axis=0)
+
+
+def _track_persons(
+    prev_centroids: dict[int, np.ndarray],
+    curr_persons: list[np.ndarray],
+    max_dist: float = 150.0,
+) -> dict[int, int]:
+    """质心追踪：按距离贪心匹配，保持人物 ID 跨帧稳定。返回 {det_idx: track_id}。"""
+    if not prev_centroids or not curr_persons:
+        return {i: i for i in range(len(curr_persons))}
+
+    curr_cents = [_person_centroid(p) for p in curr_persons]
+    prev_ids = list(prev_centroids.keys())
+    prev_pts = [prev_centroids[pid] for pid in prev_ids]
+
+    pairs = sorted(
+        ((float(np.linalg.norm(cc - pp)), ci, pi) for ci, cc in enumerate(curr_cents) for pi, pp in enumerate(prev_pts)),
+    )
+    assigned: dict[int, int] = {}
+    used_prev: set[int] = set()
+    used_curr: set[int] = set()
+    for d, ci, pi in pairs:
+        if ci in used_curr or pi in used_prev or d > max_dist:
+            continue
+        assigned[ci] = prev_ids[pi]
+        used_curr.add(ci)
+        used_prev.add(pi)
+
+    next_id = max(prev_centroids.keys()) + 1 if prev_centroids else 0
+    for ci in range(len(curr_persons)):
+        if ci not in assigned:
+            assigned[ci] = next_id
+            next_id += 1
+    return assigned
+
+
 def _extract_pose2d_from_video(
     video_path: Path, max_persons: int = 1,
 ) -> tuple[np.ndarray, float]:
-    """提取视频 2D 关键点。max_persons=1 时返回 [T,17,3]，>1 时返回 [T,P,17,3]。"""
+    """提取视频 2D 关键点（带跨帧追踪）。max_persons=1 返回 [T,17,3]，>1 返回 [T,P,17,3]。"""
     cap = cv2.VideoCapture(str(video_path))
     fps = float(cap.get(cv2.CAP_PROP_FPS) or 30.0)
     cap.release()
 
     model = _get_preview_pose_model()
     frames: list[np.ndarray] = []
+    prev_centroids: dict[int, np.ndarray] = {}
+
     for result in model.predict(
         source=str(video_path),
         stream=True,
@@ -709,6 +751,7 @@ def _extract_pose2d_from_video(
                 frames.append(np.zeros((17, 3), dtype=np.float32))
             else:
                 frames.append(np.zeros((max_persons, 17, 3), dtype=np.float32))
+            prev_centroids = {}
             continue
         kp_xy = result.keypoints.xy.cpu().numpy()
         kp_conf = result.keypoints.conf.cpu().numpy()
@@ -717,6 +760,7 @@ def _extract_pose2d_from_video(
                 frames.append(np.zeros((17, 3), dtype=np.float32))
             else:
                 frames.append(np.zeros((max_persons, 17, 3), dtype=np.float32))
+            prev_centroids = {}
             continue
 
         if max_persons <= 1:
@@ -724,15 +768,25 @@ def _extract_pose2d_from_video(
             kp = np.concatenate([kp_xy[person_idx], kp_conf[person_idx, :, None]], axis=-1)
             frames.append(kp.astype(np.float32))
         else:
-            # 按置信度降序排列，保留 max_persons 个人
+            # 提取所有检测到的人
             scores = kp_conf.mean(axis=1)
             order = np.argsort(-scores)[:max_persons]
+            det_persons = []
+            for pidx in order:
+                kp = np.concatenate([kp_xy[pidx], kp_conf[pidx, :, None]], axis=-1).astype(np.float32)
+                det_persons.append(kp)
+
+            # 跨帧追踪
+            mapping = _track_persons(prev_centroids, det_persons)
+            prev_centroids = {mapping[ci]: _person_centroid(det_persons[ci]) for ci in range(len(det_persons))}
+
+            # 按 track_id 排入固定 slot
             person_kps = np.zeros((max_persons, 17, 3), dtype=np.float32)
-            for slot, pidx in enumerate(order):
-                person_kps[slot] = np.concatenate(
-                    [kp_xy[pidx], kp_conf[pidx, :, None]], axis=-1,
-                ).astype(np.float32)
+            for ci, kp in enumerate(det_persons):
+                slot = mapping[ci] % max_persons
+                person_kps[slot] = kp
             frames.append(person_kps)
+
     if not frames:
         raise RuntimeError(f"视频无有效帧: {video_path}")
     return np.stack(frames, axis=0), fps

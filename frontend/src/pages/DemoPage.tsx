@@ -750,12 +750,17 @@ export default function DemoPage() {
                   className="gap-2"
                 >
                   <RefreshCw size={16} className={regeneratingPose ? 'animate-spin' : ''} />
-                  重新解析当前组
+                  2D 渲染
                 </Button>
                 {selectedDataset?.stage !== 'inference' && (
-                  <Button onClick={() => void handleStartTraining()} disabled={trainSubmitting || !selectedDatasetId} className="gap-2">
+                  <Button
+                    variant="outline"
+                    onClick={() => void handleStartTraining()}
+                    disabled={trainSubmitting || !selectedDatasetId}
+                    className="gap-2"
+                  >
                     <LoaderCircle size={16} className={trainSubmitting ? 'animate-spin' : ''} />
-                    开始训练
+                    训练
                   </Button>
                 )}
               </div>
