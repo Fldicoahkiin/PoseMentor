@@ -619,7 +619,76 @@ def _get_preview_pose_model():
         return _preview_pose_model
 
 
-def _extract_pose2d_from_video(video_path: Path) -> tuple[np.ndarray, float]:
+def _try_infer_3d_from_model(
+    keypoints2d: np.ndarray,
+    fps: float,
+    checkpoint: str = "artifacts/lift_demo.ckpt",
+    norm_file: str = "artifacts/lift_demo_norm.npz",
+) -> np.ndarray | None:
+    """用已训练的 PoseLiftTransformer 从 2D 关键点推理 3D 骨架。"""
+    ckpt_path = PROJECT_ROOT / checkpoint
+    norm_path = PROJECT_ROOT / norm_file
+    if not ckpt_path.exists() or not norm_path.exists():
+        logger.debug("推理模型不存在: %s / %s", ckpt_path, norm_path)
+        return None
+
+    try:
+        import torch
+
+        from posementor.models.lift_net import PoseLiftTransformer
+        from posementor.utils.math3d import center_pose
+
+        # 加载归一化参数
+        with np.load(norm_path) as nf:
+            norm_mean = nf["mean_2d"].astype(np.float32)
+            norm_std = np.clip(nf["std_2d"].astype(np.float32), 1e-6, None)
+
+        # 加载模型
+        device = torch.device("cpu")
+        state = torch.load(str(ckpt_path), map_location=device, weights_only=False)
+        state_dict = state.get("state_dict", state)
+        cleaned = {k.replace("model.", "", 1) if k.startswith("model.") else k: v for k, v in state_dict.items()}
+        first_weight = next(iter(cleaned.values()))
+        hidden_dim = int(first_weight.shape[0]) if first_weight.ndim >= 2 else 256
+        model = PoseLiftTransformer(hidden_dim=hidden_dim)
+        model.load_state_dict(cleaned, strict=False)
+        model.eval()
+        model.to(device)
+
+        # 处理多人数据：取第一人
+        kp = keypoints2d[:, 0, :, :2] if keypoints2d.ndim == 4 else keypoints2d[:, :, :2]
+        kp = kp.astype(np.float32)
+        kp_norm = (kp - norm_mean) / norm_std
+
+        # 滑窗推理
+        seq_len = 81
+        frames_3d: list[np.ndarray] = []
+        total = len(kp_norm)
+        with torch.no_grad():
+            for start in range(0, total, seq_len // 2):
+                end = min(start + seq_len, total)
+                window = kp_norm[start:end]
+                if len(window) < seq_len:
+                    pad = np.zeros((seq_len - len(window), *window.shape[1:]), dtype=np.float32)
+                    window = np.concatenate([window, pad], axis=0)
+                x = torch.from_numpy(window[None]).float().to(device)
+                pred = model(x).cpu().numpy()[0]
+                valid_len = min(seq_len, end - start)
+                frames_3d.append(pred[:valid_len])
+
+        joints3d = np.concatenate(frames_3d, axis=0)[:total]
+        joints3d = center_pose(joints3d).astype(np.float32)
+        logger.info("3D 推理完成: %d 帧, checkpoint=%s", len(joints3d), checkpoint)
+        return joints3d
+    except Exception:
+        logger.warning("3D 推理失败", exc_info=True)
+        return None
+
+
+def _extract_pose2d_from_video(
+    video_path: Path, max_persons: int = 1,
+) -> tuple[np.ndarray, float]:
+    """提取视频 2D 关键点。max_persons=1 时返回 [T,17,3]，>1 时返回 [T,P,17,3]。"""
     cap = cv2.VideoCapture(str(video_path))
     fps = float(cap.get(cv2.CAP_PROP_FPS) or 30.0)
     cap.release()
@@ -633,16 +702,34 @@ def _extract_pose2d_from_video(video_path: Path) -> tuple[np.ndarray, float]:
         verbose=False,
     ):
         if result.keypoints is None or len(result.keypoints) == 0:
-            frames.append(np.zeros((17, 3), dtype=np.float32))
+            if max_persons <= 1:
+                frames.append(np.zeros((17, 3), dtype=np.float32))
+            else:
+                frames.append(np.zeros((max_persons, 17, 3), dtype=np.float32))
             continue
         kp_xy = result.keypoints.xy.cpu().numpy()
         kp_conf = result.keypoints.conf.cpu().numpy()
         if kp_conf.shape[0] == 0:
-            frames.append(np.zeros((17, 3), dtype=np.float32))
+            if max_persons <= 1:
+                frames.append(np.zeros((17, 3), dtype=np.float32))
+            else:
+                frames.append(np.zeros((max_persons, 17, 3), dtype=np.float32))
             continue
-        person_idx = int(np.argmax(kp_conf.mean(axis=1)))
-        kp = np.concatenate([kp_xy[person_idx], kp_conf[person_idx, :, None]], axis=-1)
-        frames.append(kp.astype(np.float32))
+
+        if max_persons <= 1:
+            person_idx = int(np.argmax(kp_conf.mean(axis=1)))
+            kp = np.concatenate([kp_xy[person_idx], kp_conf[person_idx, :, None]], axis=-1)
+            frames.append(kp.astype(np.float32))
+        else:
+            # 按置信度降序排列，保留 max_persons 个人
+            scores = kp_conf.mean(axis=1)
+            order = np.argsort(-scores)[:max_persons]
+            person_kps = np.zeros((max_persons, 17, 3), dtype=np.float32)
+            for slot, pidx in enumerate(order):
+                person_kps[slot] = np.concatenate(
+                    [kp_xy[pidx], kp_conf[pidx, :, None]], axis=-1,
+                ).astype(np.float32)
+            frames.append(person_kps)
     if not frames:
         raise RuntimeError(f"视频无有效帧: {video_path}")
     return np.stack(frames, axis=0), fps
@@ -1003,6 +1090,7 @@ def workspace_pose_preview(
     dataset_id: str,
     video_path: str,
     refresh: bool = False,
+    model: str = "artifacts/lift_demo.ckpt",
 ) -> dict[str, object]:
     dataset = _get_dataset_or_404(dataset_id)
     normalized = _normalize_dataset_item(dataset)
@@ -1089,7 +1177,11 @@ def workspace_pose_preview(
         pose2d_dep_file = source_pose2d_cache
     else:
         try:
-            keypoints2d, fps_value = _extract_pose2d_from_video(source_video)
+            is_inference = str(dataset.get("stage", "")).strip() == "inference"
+            max_persons = 6 if is_inference else 1
+            keypoints2d, fps_value = _extract_pose2d_from_video(
+                source_video, max_persons=max_persons,
+            )
             np.savez_compressed(
                 source_pose2d_cache,
                 keypoints2d=keypoints2d,
@@ -1143,33 +1235,45 @@ def workspace_pose_preview(
         elif not all(_preview_video_cache_valid(p) for p in required_outputs):
             need_render = True
 
+    # 无 GT3D 时尝试用已训练模型推理 3D
+    if not has_gt3d:
+        # model 参数对应 ckpt 文件路径，norm 文件取同名 _norm.npz
+        norm_file = model.replace(".ckpt", "_norm.npz") if model.endswith(".ckpt") else "artifacts/lift_demo_norm.npz"
+        inferred_3d = _try_infer_3d_from_model(keypoints2d, fps_value, checkpoint=model, norm_file=norm_file)
+        if inferred_3d is not None:
+            joints3d = inferred_3d
+            has_gt3d = True  # 标记为有 3D 数据（推理得到的）
+
     frame_count = len(keypoints2d) if joints3d is None else min(len(keypoints2d), len(joints3d))
     stats: dict[str, float] = {
         "fps": max(0.0, fps_value),
         "frames": float(frame_count),
     }
+
+    # 多人数据需要取第一人用于 render（render 只支持单人 [T,J,C]）
+    render_kp2d = keypoints2d[:, 0] if keypoints2d.ndim == 4 else keypoints2d
+
     if need_render:
         if has_gt3d and joints3d is not None:
             stats = render_pose_preview_videos(
                 source_video=source_video,
-                keypoints2d=keypoints2d,
+                keypoints2d=render_kp2d,
                 joints3d=joints3d,
                 output_source=output_source,
                 output_2d=output_2d,
                 output_3d=output_3d,
             )
         else:
-            # 无 3D GT 数据时：渲染 source + 2D，用零占位跳过 3D
-            dummy_3d = np.zeros((len(keypoints2d), keypoints2d.shape[1], 3), dtype=np.float32)
+            dummy_3d = np.zeros((len(render_kp2d), render_kp2d.shape[1], 3), dtype=np.float32)
             render_pose_preview_videos(
                 source_video=source_video,
-                keypoints2d=keypoints2d,
+                keypoints2d=render_kp2d,
                 joints3d=dummy_3d,
                 output_source=output_source,
                 output_2d=output_2d,
                 output_3d=output_3d,
             )
-            stats = {"fps": max(0.0, fps_value), "frames": float(len(keypoints2d))}
+            stats = {"fps": max(0.0, fps_value), "frames": float(len(render_kp2d))}
 
     expected_frame_total = int(stats["frames"])
     need_export_pose2d_data = bool(refresh) or not output_2d_data.exists()
@@ -1287,6 +1391,24 @@ def upsert_dataset(req: DatasetUpsertRequest) -> dict[str, object]:
 
     save_yaml(DATASET_REGISTRY_FILE, {"datasets": rows})
     return {"ok": True, "dataset": _enrich_dataset_item(normalized)}
+
+
+@router.get("/artifacts/models")
+def list_models() -> dict[str, list[dict[str, object]]]:
+    """列出可用于 3D 推理的模型文件。"""
+    models: list[dict[str, object]] = []
+    for ckpt in sorted(ARTIFACT_ROOT.glob("*.ckpt")):
+        norm = ckpt.with_name(ckpt.stem.replace(".ckpt", "") + "_norm.npz")
+        # 只保留 lift_demo 主模型，跳过 epoch 版本
+        if "epoch=" in ckpt.name:
+            continue
+        models.append({
+            "name": ckpt.stem,
+            "path": f"artifacts/{ckpt.name}",
+            "norm_exists": norm.exists(),
+            "size_bytes": ckpt.stat().st_size,
+        })
+    return {"models": models}
 
 
 @router.get("/artifacts/status")

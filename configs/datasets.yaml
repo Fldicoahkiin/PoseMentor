@@ -8,13 +8,13 @@ datasets:
   video_root: data/raw/aistpp/videos
   notes: 默认数据源，已接入完整预处理与训练链路。
 - id: custom_dance
-  name: 自定义舞蹈素材
-  stage: active
+  name: 自定义舞蹈素材（推理）
+  stage: inference
   mode: singleview
   data_config: ''
   train_config: ''
   video_root: data/raw/custom_dance/videos
-  notes: 非标准舞蹈练习视频，单机位混合场景，用于姿态提取和教学对比。
+  notes: 推理素材，使用 AIST++ 训练的模型对舞蹈视频进行 2D/3D 姿态推理，不参与模型训练。
 - id: custom_multiview
   name: Custom FourView
   stage: planned

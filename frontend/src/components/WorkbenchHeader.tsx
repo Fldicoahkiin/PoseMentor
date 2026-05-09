@@ -1,6 +1,6 @@
 import { RefreshCw } from 'lucide-react';
 import { Button } from './ui/Button';
-import type { DatasetItem, StandardItem } from '../lib/api';
+import type { DatasetItem, ModelItem, StandardItem } from '../lib/api';
 
 type StepStatus = 'ready' | 'running' | 'waiting' | 'error';
 
@@ -23,11 +23,14 @@ interface WorkbenchHeaderProps {
   selectedDatasetMode: string | undefined;
   selectedStandardName: string | undefined;
   videoRoot: string | undefined;
+  models: ModelItem[];
+  selectedModel: string;
   pipelineSteps: PipelineStep[];
   onRefreshCore: () => void;
   onRefreshPreview: () => void;
   onDatasetChange: (id: string) => void;
   onStandardChange: (id: string) => void;
+  onModelChange: (path: string) => void;
 }
 
 const STEP_STATUS_COLOR: Record<StepStatus, string> = {
@@ -53,8 +56,11 @@ export function WorkbenchHeader({
   pipelineSteps,
   onRefreshCore,
   onRefreshPreview,
+  models,
+  selectedModel,
   onDatasetChange,
   onStandardChange,
+  onModelChange,
 }: WorkbenchHeaderProps) {
   return (
     <div className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm">
@@ -85,10 +91,10 @@ export function WorkbenchHeader({
           </Button>
         </div>
       </div>
-      <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-2">
+      <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-3">
         <div>
           <label htmlFor="selected-dataset" className="mb-1 block text-xs font-bold uppercase tracking-wider text-zinc-500">
-            训练数据集
+            数据集
           </label>
           <select
             id="selected-dataset"
@@ -118,6 +124,27 @@ export function WorkbenchHeader({
                 {item.name}
               </option>
             ))}
+          </select>
+        </div>
+        <div>
+          <label htmlFor="selected-model" className="mb-1 block text-xs font-bold uppercase tracking-wider text-zinc-500">
+            推理模型
+          </label>
+          <select
+            id="selected-model"
+            value={selectedModel}
+            onChange={(event) => onModelChange(event.target.value)}
+            className="w-full rounded-xl border border-zinc-200 bg-stone-50 px-3 py-2 text-sm"
+          >
+            {models.length > 0 ? (
+              models.map((m) => (
+                <option key={m.path} value={m.path}>
+                  {m.name}{m.norm_exists ? '' : ' (缺 norm)'}
+                </option>
+              ))
+            ) : (
+              <option value="artifacts/lift_demo.ckpt">lift_demo (默认)</option>
+            )}
           </select>
         </div>
       </div>

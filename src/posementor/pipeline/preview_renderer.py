@@ -210,8 +210,10 @@ def build_pose2d_preview_data(
     frame_height: int,
     frame_total: int | None = None,
 ) -> dict[str, object]:
-    if keypoints2d.ndim != 3 or keypoints2d.shape[-1] < 2:
-        raise ValueError("keypoints2d 形状必须为 [T, J, C]，且至少包含 xy 坐标")
+    """导出 2D 骨架预览 JSON。支持单人 [T,J,C] 和多人 [T,P,J,C] 两种格式。"""
+    multi_person = keypoints2d.ndim == 4
+    if not multi_person and (keypoints2d.ndim != 3 or keypoints2d.shape[-1] < 2):
+        raise ValueError("keypoints2d 形状必须为 [T, J, C] 或 [T, P, J, C]")
 
     available_frames = int(keypoints2d.shape[0])
     use_frames = (
@@ -226,15 +228,27 @@ def build_pose2d_preview_data(
     if keypoints_use.shape[-1] >= 3:
         keypoints_use[..., 2] = np.clip(keypoints_use[..., 2], 0.0, 1.0)
     rounded = np.round(keypoints_use, POSE2D_JSON_DECIMALS).astype(np.float32)
-    return {
+
+    joint_count = int(keypoints_use.shape[2] if multi_person else keypoints_use.shape[1])
+    person_count = int(keypoints_use.shape[1]) if multi_person else 1
+
+    result: dict[str, object] = {
         "fps": float(max(1.0, fps)),
         "frame_count": int(use_frames),
-        "joint_count": int(keypoints_use.shape[1]),
+        "joint_count": joint_count,
+        "person_count": person_count,
         "frame_width": int(max(1, frame_width)),
         "frame_height": int(max(1, frame_height)),
         "edges": [[int(a), int(b)] for a, b in SKELETON_EDGES],
-        "keypoints2d": rounded.tolist(),
     }
+    if multi_person:
+        # [T, P, J, C] -> 前端 persons[T][P][J][C]
+        result["persons"] = rounded.tolist()
+        # 兼容旧前端：取第一人作为 keypoints2d
+        result["keypoints2d"] = rounded[:, 0, :, :].tolist()
+    else:
+        result["keypoints2d"] = rounded.tolist()
+    return result
 
 
 def _draw_scene_grid(canvas: np.ndarray) -> None:

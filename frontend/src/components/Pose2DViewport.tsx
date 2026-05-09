@@ -4,10 +4,12 @@ type Pose2DData = {
   fps: number;
   frame_count: number;
   joint_count: number;
+  person_count?: number;
   frame_width: number;
   frame_height: number;
   edges: Array<[number, number]>;
   keypoints2d: number[][][];
+  persons?: number[][][][]; // [T][P][J][C] 多人格式
 };
 
 type Pose2DViewportProps = {
@@ -36,6 +38,16 @@ const JOINT_COLOR = '#c98256';
 const GUIDE_COLOR = 'rgba(120, 120, 120, 0.12)';
 const FRAME_BORDER_COLOR = 'rgba(255, 255, 255, 0.52)';
 const FRAME_GLOW_COLOR = 'rgba(18, 18, 18, 0.18)';
+
+// 多人调色板：每个人一种颜色
+const PERSON_PALETTE = [
+  { edge: '#8f5f43', joint: '#c98256' },
+  { edge: '#2563eb', joint: '#60a5fa' },
+  { edge: '#059669', joint: '#34d399' },
+  { edge: '#d97706', joint: '#fbbf24' },
+  { edge: '#7c3aed', joint: '#a78bfa' },
+  { edge: '#dc2626', joint: '#f87171' },
+];
 
 type FrameLayout = {
   offsetX: number;
@@ -72,6 +84,49 @@ function buildLayout(
   };
 }
 
+function drawPersonSkeleton(
+  ctx: CanvasRenderingContext2D,
+  joints: number[][],
+  layout: FrameLayout,
+  edges: Array<[number, number]>,
+  edgeWidth: number,
+  jointRadius: number,
+  edgeColor: string,
+  jointColor: string,
+): void {
+  const points = joints.map((joint) => ({
+    x: layout.offsetX + joint[0] * layout.scale,
+    y: layout.offsetY + joint[1] * layout.scale,
+    conf: joint[2] ?? 1,
+  }));
+
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.strokeStyle = edgeColor;
+  ctx.lineWidth = edgeWidth;
+  edges.forEach(([start, end]) => {
+    const s = points[start];
+    const e = points[end];
+    if (!s || !e || s.conf < CONFIDENCE_THRESHOLD || e.conf < CONFIDENCE_THRESHOLD) return;
+    ctx.beginPath();
+    ctx.moveTo(s.x, s.y);
+    ctx.lineTo(e.x, e.y);
+    ctx.stroke();
+  });
+
+  points.forEach((point) => {
+    if (point.conf < CONFIDENCE_THRESHOLD) return;
+    ctx.beginPath();
+    ctx.fillStyle = 'rgba(255,255,255,0.9)';
+    ctx.arc(point.x, point.y, jointRadius + 0.85, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.fillStyle = jointColor;
+    ctx.arc(point.x, point.y, jointRadius, 0, Math.PI * 2);
+    ctx.fill();
+  });
+}
+
 function drawViewport(
   ctx: CanvasRenderingContext2D,
   width: number,
@@ -81,7 +136,6 @@ function drawViewport(
   layout: FrameLayout,
   hasVideo: boolean,
 ): void {
-  const frame = data.keypoints2d[frameIndex] ?? data.keypoints2d[0];
   const minSide = Math.min(width, height);
   const edgeWidth = clamp(minSide * EDGE_WIDTH_RATIO, EDGE_WIDTH_MIN, EDGE_WIDTH_MAX);
   const jointRadius = clamp(minSide * JOINT_RADIUS_RATIO, JOINT_RADIUS_MIN, JOINT_RADIUS_MAX);
@@ -89,7 +143,6 @@ function drawViewport(
   if (!hasVideo) {
     ctx.fillStyle = BG_COLOR;
     ctx.fillRect(0, 0, width, height);
-
     ctx.strokeStyle = GUIDE_COLOR;
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -110,45 +163,26 @@ function drawViewport(
     ctx.restore();
   }
 
-  const points = frame.map((joint) => ({
-    x: layout.offsetX + joint[0] * layout.scale,
-    y: layout.offsetY + joint[1] * layout.scale,
-    conf: joint[2] ?? 1,
-  }));
-
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
-  ctx.strokeStyle = EDGE_COLOR;
-  ctx.lineWidth = edgeWidth;
-  data.edges.forEach(([start, end]) => {
-    const startPoint = points[start];
-    const endPoint = points[end];
-    if (!startPoint || !endPoint || startPoint.conf < CONFIDENCE_THRESHOLD || endPoint.conf < CONFIDENCE_THRESHOLD) {
-      return;
+  // 多人模式：persons[T][P][J][C]
+  const personCount = data.person_count ?? 1;
+  if (data.persons && personCount > 1) {
+    const framePersons = data.persons[frameIndex] ?? data.persons[0];
+    for (let p = 0; p < Math.min(framePersons.length, PERSON_PALETTE.length); p++) {
+      const joints = framePersons[p];
+      if (!joints || joints.every((j) => (j[2] ?? 0) < CONFIDENCE_THRESHOLD)) continue;
+      const palette = PERSON_PALETTE[p % PERSON_PALETTE.length];
+      drawPersonSkeleton(ctx, joints, layout, data.edges, edgeWidth, jointRadius, palette.edge, palette.joint);
     }
-    ctx.beginPath();
-    ctx.moveTo(startPoint.x, startPoint.y);
-    ctx.lineTo(endPoint.x, endPoint.y);
-    ctx.stroke();
-  });
-
-  points.forEach((point) => {
-    if (point.conf < CONFIDENCE_THRESHOLD) {
-      return;
-    }
-    ctx.beginPath();
-    ctx.fillStyle = 'rgba(255,255,255,0.9)';
-    ctx.arc(point.x, point.y, jointRadius + 0.85, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.fillStyle = JOINT_COLOR;
-    ctx.arc(point.x, point.y, jointRadius, 0, Math.PI * 2);
-    ctx.fill();
-  });
+  } else {
+    // 单人模式：keypoints2d[T][J][C]
+    const frame = data.keypoints2d[frameIndex] ?? data.keypoints2d[0];
+    drawPersonSkeleton(ctx, frame, layout, data.edges, edgeWidth, jointRadius, EDGE_COLOR, JOINT_COLOR);
+  }
 
   ctx.fillStyle = 'rgba(62, 62, 62, 0.86)';
   ctx.font = '600 12px "SF Pro Display", "PingFang SC", sans-serif';
-  ctx.fillText(`frame ${frameIndex + 1}/${data.frame_count}`, 16, 22);
+  const label = personCount > 1 ? `frame ${frameIndex + 1}/${data.frame_count} · ${personCount}人` : `frame ${frameIndex + 1}/${data.frame_count}`;
+  ctx.fillText(label, 16, 22);
 }
 
 export function Pose2DViewport({

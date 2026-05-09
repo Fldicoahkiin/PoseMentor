@@ -221,10 +221,26 @@ export async function fetchSourcePreview(datasetId: string, limit = 4) {
   return data;
 }
 
-export async function fetchPosePreview(datasetId: string, videoPath: string, force = false) {
+export type ModelItem = {
+  name: string;
+  path: string;
+  norm_exists: boolean;
+  size_bytes: number;
+};
+
+export async function fetchModels() {
+  const { data } = await client.get<{ models: ModelItem[] }>("/artifacts/models");
+  return data.models;
+}
+
+export async function fetchPosePreview(datasetId: string, videoPath: string, force = false, model?: string) {
+  const params: Record<string, string> = { dataset_id: datasetId, video_path: videoPath, refresh: force ? "1" : "0" };
+  if (model) {
+    params.model = model;
+  }
   const { data } = await client.get<PosePreviewPayload>("/workspace/pose-preview", {
-    params: { dataset_id: datasetId, video_path: videoPath, refresh: force ? "1" : "0" },
-    timeout: 60000,
+    params,
+    timeout: 120000,
   });
   return data;
 }

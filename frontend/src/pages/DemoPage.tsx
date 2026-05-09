@@ -21,10 +21,12 @@ import {
   fetchDatasets,
   fetchHealth,
   fetchJobs,
+  fetchModels,
   fetchPosePreview,
   fetchSourcePreview,
   fetchStandards,
   type ArtifactManifestPayload,
+  type ModelItem,
   type ArtifactStatus,
   type DatasetItem,
   type JobItem,
@@ -110,6 +112,8 @@ export default function DemoPage() {
   const [artifactManifest, setArtifactManifest] = useState<ArtifactManifestPayload | null>(null);
   const [sourcePreview, setSourcePreview] = useState<SourcePreviewPayload | null>(null);
   const [summaryText, setSummaryText] = useState('');
+  const [models, setModels] = useState<ModelItem[]>([]);
+  const [selectedModel, setSelectedModel] = useState('artifacts/lift_demo.ckpt');
   const [trainSubmitting, setTrainSubmitting] = useState(false);
   const [regeneratingPose, setRegeneratingPose] = useState(false);
   const [autoAdvancePending, setAutoAdvancePending] = useState(false);
@@ -127,13 +131,14 @@ export default function DemoPage() {
     setLoading(true);
     setError('');
     try {
-      const [healthResp, datasetsResp, standardsResp, jobsResp, artifactsResp, manifestResp] = await Promise.all([
+      const [healthResp, datasetsResp, standardsResp, jobsResp, artifactsResp, manifestResp, modelsResp] = await Promise.all([
         fetchHealth(),
         fetchDatasets(),
         fetchStandards(),
         fetchJobs(),
         fetchArtifactStatus(),
         fetchArtifactManifest(80),
+        fetchModels(),
       ]);
       setHealth(healthResp.status);
       setDatasets(datasetsResp);
@@ -141,6 +146,7 @@ export default function DemoPage() {
       setJobs(jobsResp);
       setArtifactStatus(artifactsResp);
       setArtifactManifest(manifestResp);
+      setModels(modelsResp);
     } catch (err) {
       console.error(err);
       setError('无法连接后端，请先启动 backend_api.py');
@@ -719,8 +725,11 @@ export default function DemoPage() {
               pipelineSteps={pipelineSteps}
               onRefreshCore={() => void refreshCore()}
               onRefreshPreview={() => void refreshPreview(selectedDatasetId)}
+              models={models}
+              selectedModel={selectedModel}
               onDatasetChange={setSelectedDatasetId}
               onStandardChange={setSelectedStandardId}
+              onModelChange={setSelectedModel}
             />
 
           <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
