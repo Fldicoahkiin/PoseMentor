@@ -648,8 +648,9 @@ def _try_infer_3d_from_model(
         state = torch.load(str(ckpt_path), map_location=device, weights_only=False)
         state_dict = state.get("state_dict", state)
         cleaned = {k.replace("model.", "", 1) if k.startswith("model.") else k: v for k, v in state_dict.items()}
-        first_weight = next(iter(cleaned.values()))
-        hidden_dim = int(first_weight.shape[0]) if first_weight.ndim >= 2 else 256
+        # 从 input_proj.weight 推断 hidden_dim（shape=[hidden_dim, input_dim]）
+        proj_key = next((k for k in cleaned if "input_proj.weight" in k), None)
+        hidden_dim = int(cleaned[proj_key].shape[0]) if proj_key else 256
         model = PoseLiftTransformer(hidden_dim=hidden_dim)
         model.load_state_dict(cleaned, strict=False)
         model.eval()
