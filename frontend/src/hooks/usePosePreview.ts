@@ -38,23 +38,24 @@ export function usePosePreview(
   const posePreviewPendingRef = useRef<Record<string, Promise<PosePreviewPayload | null>>>({});
   const previewDatasetRef = useRef('');
 
-  // 同步 dataset ref
+  // dataset 切换时：渲染期间重置 state，effect 中清 refs
+  const [prevDatasetId, setPrevDatasetId] = useState(selectedDatasetId);
+  if (prevDatasetId !== selectedDatasetId) {
+    setPrevDatasetId(selectedDatasetId);
+    setPosePreviewMap({});
+    setPosePreviewError('');
+  }
+
   useEffect(() => {
     previewDatasetRef.current = selectedDatasetId;
+    posePreviewCacheRef.current = {};
+    posePreviewPendingRef.current = {};
   }, [selectedDatasetId]);
 
   // 同步 cache ref
   useEffect(() => {
     posePreviewCacheRef.current = posePreviewMap;
   }, [posePreviewMap]);
-
-  // dataset 切换时清空缓存
-  useEffect(() => {
-    posePreviewCacheRef.current = {};
-    posePreviewPendingRef.current = {};
-    setPosePreviewMap({});
-    setPosePreviewError('');
-  }, [selectedDatasetId]);
 
   const fetchPosePreviewForSample = useCallback(
     async (sample: SourcePreviewItem): Promise<PosePreviewPayload | null> => {

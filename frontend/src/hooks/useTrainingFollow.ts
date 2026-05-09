@@ -33,29 +33,37 @@ export function useTrainingFollow(
   const [followTotalStep, setFollowTotalStep] = useState(0);
   const [trainEvents, setTrainEvents] = useState<string[]>([]);
   const [trainHint, setTrainHint] = useState('');
-  const [progressUpdatedAt, setProgressUpdatedAt] = useState(0);
-  const [progressWatchTs, setProgressWatchTs] = useState(0);
+  const [trainingStalled, setTrainingStalled] = useState(false);
   const [pendingAutoPlayJobId, setPendingAutoPlayJobId] = useState('');
-  const progressValueRef = useRef(0);
 
-  // 自动跟踪运行中的训练任务
-  useEffect(() => {
+  // 时间戳只用于 stall 检测，不参与渲染，用 refs 避免 purity 问题
+  const progressValueRef = useRef(0);
+  const progressUpdatedAtRef = useRef(0);
+  const progressWatchTsRef = useRef(0);
+
+  // 自动跟踪运行中的训练任务（渲染期间纯 setState）
+  const [prevLatestJobId, setPrevLatestJobId] = useState<string | null>(null);
+  const currentLatestJobId = latestTrainJob?.job_id ?? null;
+  if (currentLatestJobId !== prevLatestJobId) {
+    setPrevLatestJobId(currentLatestJobId);
     if (followTraining) {
       if (latestTrainJob) {
         setFollowTrainJobId(latestTrainJob.job_id);
       }
-      return;
-    }
-    if (latestTrainJob?.status === 'running') {
+    } else if (latestTrainJob?.status === 'running') {
       setFollowTraining(true);
       setFollowTrainJobId(latestTrainJob.job_id);
-      if (progressUpdatedAt === 0) {
-        const now = Date.now();
-        setProgressUpdatedAt(now);
-        setProgressWatchTs(now);
-      }
     }
-  }, [followTraining, latestTrainJob, progressUpdatedAt]);
+  }
+
+  // 新检测到运行中任务时初始化时间戳（effect，允许 refs + Date.now）
+  useEffect(() => {
+    if (followTraining && progressUpdatedAtRef.current === 0) {
+      const now = Date.now();
+      progressUpdatedAtRef.current = now;
+      progressWatchTsRef.current = now;
+    }
+  }, [followTraining]);
 
   // 轮询训练进度
   useEffect(() => {
@@ -78,11 +86,16 @@ export function useTrainingFollow(
         setFollowCurrentStep(Math.max(0, Number(progress.current_step) || 0));
         setFollowTotalStep(Math.max(0, Number(progress.total_step) || 0));
         const now = Date.now();
-        setProgressWatchTs(now);
+        progressWatchTsRef.current = now;
         if (progressValue >= progressValueRef.current + 0.001) {
           progressValueRef.current = progressValue;
-          setProgressUpdatedAt(now);
+          progressUpdatedAtRef.current = now;
         }
+        // stall 检测：在轮询回调中计算，避免渲染期间读 refs
+        const stalled = progressValue < 0.999
+          && progressUpdatedAtRef.current > 0
+          && now - progressUpdatedAtRef.current > TRAIN_PROGRESS_STALL_MS;
+        setTrainingStalled(stalled);
         if (progress.events.length > 0) {
           const latestEvents = progress.events.slice(-4);
           setTrainEvents(latestEvents);
@@ -103,46 +116,42 @@ export function useTrainingFollow(
     };
   }, [followTraining, followTrainJobId]);
 
-  // 检测训练完成/失败
-  useEffect(() => {
-    if (!followTraining || !followTrainJobId) {
-      return;
-    }
-    const currentJob = jobs.find((item) => item.job_id === followTrainJobId);
-    if (!currentJob) {
-      return;
-    }
-    if (currentJob.status === 'failed') {
+  // 检测训练完成/失败（渲染期间纯 setState）
+  const currentFollowedJob = followTrainJobId
+    ? jobs.find((item) => item.job_id === followTrainJobId)
+    : null;
+  const followedJobStatus = currentFollowedJob?.status;
+  const [prevFollowedJobStatus, setPrevFollowedJobStatus] = useState<string | undefined>(undefined);
+  if (followedJobStatus !== prevFollowedJobStatus) {
+    setPrevFollowedJobStatus(followedJobStatus);
+    if (followTraining && followedJobStatus === 'failed') {
       setFollowTraining(false);
       setTrainHint(`训练失败：${followTrainJobId}`);
       setTrainEvents([]);
-      return;
-    }
-    if (currentJob.status === 'succeeded') {
+      setTrainingStalled(false);
+    } else if (followTraining && followedJobStatus === 'succeeded') {
       setFollowProgress(1);
-      setFollowCurrentStep((prev) => (followTotalStep > 0 ? followTotalStep : prev));
+      setFollowCurrentStep(followTotalStep > 0 ? followTotalStep : followCurrentStep);
       setFollowTraining(false);
       setTrainHint(
         syncReady
           ? `训练完成：${followTrainJobId}，正在准备同步播放。`
           : `训练完成：${followTrainJobId}，等待骨架加载完成后可播放。`,
       );
-      progressValueRef.current = 1;
-      setProgressUpdatedAt(Date.now());
-      setProgressWatchTs(Date.now());
+      setTrainingStalled(false);
       setPendingAutoPlayJobId(followTrainJobId);
     }
-  }, [followTotalStep, followTrainJobId, followTraining, jobs, syncReady]);
+  }
 
-  const trainingStalled = useMemo(() => {
-    if (!followTraining || followProgress >= 0.999) {
-      return false;
+  // 训练完成时更新 refs（effect，允许 refs + Date.now）
+  useEffect(() => {
+    if (followedJobStatus === 'succeeded') {
+      progressValueRef.current = 1;
+      const now = Date.now();
+      progressUpdatedAtRef.current = now;
+      progressWatchTsRef.current = now;
     }
-    if (progressUpdatedAt <= 0 || progressWatchTs <= 0) {
-      return false;
-    }
-    return progressWatchTs - progressUpdatedAt > TRAIN_PROGRESS_STALL_MS;
-  }, [followProgress, followTraining, progressUpdatedAt, progressWatchTs]);
+  }, [followedJobStatus]);
 
   const progressPercent = useMemo(() => {
     const raw = Math.max(0, Math.min(100, followProgress * 100));
@@ -177,10 +186,11 @@ export function useTrainingFollow(
     setFollowCurrentStep(0);
     setFollowTotalStep(0);
     setTrainEvents([]);
+    setTrainingStalled(false);
     progressValueRef.current = 0;
     const now = Date.now();
-    setProgressUpdatedAt(now);
-    setProgressWatchTs(now);
+    progressUpdatedAtRef.current = now;
+    progressWatchTsRef.current = now;
   }, []);
 
   return {

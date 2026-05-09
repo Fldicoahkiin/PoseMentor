@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  FileStack,
   Film,
   LoaderCircle,
-  Pause,
-  Play,
   RefreshCw,
 } from 'lucide-react';
 import { AlignmentInfoPanel } from '../components/AlignmentInfoPanel';
+import { ArtifactSection } from '../components/ArtifactSection';
+import { PlaybackControlBar } from '../components/PlaybackControlBar';
+import { TrainingProgressBar } from '../components/TrainingProgressBar';
+import { SourceGroupSelector } from '../components/SourceGroupSelector';
+import { WorkbenchHeader } from '../components/WorkbenchHeader';
 import { Pose2DViewport } from '../components/Pose2DViewport';
 import { Pose3DViewport } from '../components/Pose3DViewport';
 import { Button } from '../components/ui/Button';
@@ -34,11 +36,8 @@ import {
 } from '../lib/api';
 import {
   CAMERA_TOKEN_PATTERN,
-  formatBytes,
-  formatClock,
   formatDecimal,
   formatFrameOffset,
-  formatTime,
 } from '../lib/videoUtils';
 import { useDatasetSelection } from '../hooks/useDatasetSelection';
 import { usePosePreview } from '../hooks/usePosePreview';
@@ -166,7 +165,7 @@ export default function DemoPage() {
     } finally {
       setPreviewLoading(false);
     }
-  }, []);
+  }, [setSelectedGroupKey]);
 
   useEffect(() => {
     void refreshCore();
@@ -529,7 +528,7 @@ export default function DemoPage() {
     setSelectedGroupKey(nextGroup.key);
     setAutoAdvancePending(true);
     setTrainHint(`当前素材组播放结束，切换到 ${nextGroup.label}`);
-  }, [followTraining, getMasterSourceVideo, handleSyncPause, nextGroup, selectedGroupKey, syncDuration, syncSeekAll]);
+  }, [followTraining, getMasterSourceVideo, handleSyncPause, nextGroup, selectedGroupKey, setSelectedGroupKey, setTrainHint, syncDuration, syncSeekAll]);
 
   // sync ticker effect 已迁移到 useSyncPlayback hook
 
@@ -557,7 +556,7 @@ export default function DemoPage() {
   useEffect(() => {
     autoPlayedJobRef.current = '';
     setPendingAutoPlayJobId('');
-  }, [selectedDatasetId]);
+  }, [selectedDatasetId, setPendingAutoPlayJobId]);
 
   useEffect(() => {
     setAutoAdvancePending(false);
@@ -592,7 +591,7 @@ export default function DemoPage() {
     return () => {
       cancelled = true;
     };
-  }, [followTraining, handleSyncPlay, pendingAutoPlayJobId, posePreviewLoading, syncDuration, syncReady]);
+  }, [followTraining, handleSyncPlay, pendingAutoPlayJobId, posePreviewLoading, setPendingAutoPlayJobId, setTrainHint, syncDuration, syncReady]);
 
   const handleStartTraining = useCallback(async () => {
     if (!selectedDatasetId) {
@@ -620,7 +619,7 @@ export default function DemoPage() {
     } finally {
       setTrainSubmitting(false);
     }
-  }, [handleSyncPause, refreshCore, selectedDataset?.train_config, selectedDatasetId, syncSeekAll]);
+  }, [handleSyncPause, refreshCore, selectedDataset?.train_config, selectedDatasetId, setPendingAutoPlayJobId, setTrainHint, startFollowing, syncSeekAll]);
 
   const handleRegenerateCurrentGroup = useCallback(async () => {
     if (!selectedDatasetId || currentGroupSamples.length === 0) {
@@ -674,7 +673,7 @@ export default function DemoPage() {
     } finally {
       setRegeneratingPose(false);
     }
-  }, [currentGroup?.label, currentGroupSamples, markSourcePreviewGenerated, selectedDatasetId]);
+  }, [currentGroup?.label, currentGroupSamples, invalidateSamples, markSourcePreviewGenerated, selectedDatasetId, setGroupPrepareDone, setGroupPrepareTotal, setPosePreviewError, setPosePreviewMap, setTrainHint]);
 
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -692,142 +691,37 @@ export default function DemoPage() {
         </div>
       )}
 
-      {(followTraining || followProgress > 0) && (
-        <section className="rounded-2xl border border-zinc-200 bg-white px-5 py-4 shadow-sm">
-          <div className="mb-2 flex items-center justify-between gap-3">
-            <div className="text-sm font-semibold text-zinc-800">
-              {followTraining ? '训练进行中' : '训练完成'}
-            </div>
-            <div className="text-xs font-semibold text-zinc-600">
-              {progressTextPercent.toFixed(1)}% · {followStepLabel}
-            </div>
-          </div>
-          <div className="h-2 w-full rounded-full bg-zinc-200">
-            <div
-              className={`h-2 rounded-full transition-all ${trainingStalled ? 'bg-amber-500' : 'bg-zinc-900'} ${
-                followTraining && followProgress < 0.01 ? 'animate-pulse' : ''
-              }`}
-              style={{ width: `${progressPercent}%` }}
-            />
-          </div>
-          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
-            {trainingStalled ? (
-              <span className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-amber-700">
-                训练进度长时间未更新，建议查看日志定位卡点。
-              </span>
-            ) : (
-              <span className="rounded-md border border-zinc-200 bg-stone-50 px-2 py-1 text-zinc-600">
-                进度正常更新
-              </span>
-            )}
-          </div>
-          {trainEvents.length > 0 && (
-            <div className="mt-3 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2">
-              <p className="mb-1 text-xs font-semibold text-zinc-600">训练事件</p>
-              <div className="space-y-1 text-xs text-zinc-700">
-                {trainEvents.map((line) => (
-                  <div key={line} className="truncate">
-                    {line}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </section>
-      )}
+      <TrainingProgressBar
+        followTraining={followTraining}
+        progressPercent={progressPercent}
+        progressTextPercent={progressTextPercent}
+        followStepLabel={followStepLabel}
+        trainingStalled={trainingStalled}
+        followProgress={followProgress}
+        trainEvents={trainEvents}
+      />
 
       <section className="space-y-6">
         <div className="space-y-6">
-            <div className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-3">
-                  <h1 className="text-lg font-bold text-zinc-900">训练工作台</h1>
-                  <span className="flex items-center gap-1.5 text-xs text-zinc-500">
-                    <span className={`inline-block h-2 w-2 rounded-full ${health === 'ok' ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`} />
-                    {health === 'ok' ? '在线' : '离线'}
-                  </span>
-                  {failedJobs > 0 && <span className="text-xs text-rose-600">失败 {failedJobs}</span>}
-                  {runningJobs > 0 && <span className="text-xs text-amber-600">运行中 {runningJobs}</span>}
-                </div>
-                <div className="flex gap-2">
-                  <Button variant="outline" size="sm" onClick={() => void refreshCore()} disabled={loading} className="gap-1.5">
-                    <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
-                    刷新
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="gap-1.5"
-                    disabled={previewLoading || !selectedDatasetId}
-                    onClick={() => void refreshPreview(selectedDatasetId)}
-                  >
-                    <RefreshCw size={14} className={previewLoading ? 'animate-spin' : ''} />
-                    素材
-                  </Button>
-                </div>
-              </div>
-              <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-2">
-                <div>
-                  <label htmlFor="selected-dataset" className="mb-1 block text-xs font-bold uppercase tracking-wider text-zinc-500">
-                    训练数据集
-                  </label>
-                  <select
-                    id="selected-dataset"
-                    value={selectedDatasetId}
-                    onChange={(event) => setSelectedDatasetId(event.target.value)}
-                    className="w-full rounded-xl border border-zinc-200 bg-stone-50 px-3 py-2 text-sm"
-                  >
-                    {datasets.map((dataset) => (
-                      <option key={dataset.id} value={dataset.id}>
-                        {dataset.name} · {dataset.id}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label htmlFor="selected-standard" className="mb-1 block text-xs font-bold uppercase tracking-wider text-zinc-500">
-                    评分标准库
-                  </label>
-                  <select
-                    id="selected-standard"
-                    value={selectedStandardId}
-                    onChange={(event) => setSelectedStandardId(event.target.value)}
-                    className="w-full rounded-xl border border-zinc-200 bg-stone-50 px-3 py-2 text-sm"
-                  >
-                    {standards.map((item) => (
-                      <option key={item.id} value={item.id}>
-                        {item.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-              <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-zinc-500">
-                <span>模式 <b className="text-zinc-800">{selectedDataset?.mode || '-'}</b></span>
-                <span>标准 <b className="text-zinc-800">{selectedStandard?.name || '-'}</b></span>
-                <span>路径 <b className="text-zinc-800">{sourcePreview?.video_root || '-'}</b></span>
-              </div>
-              <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1">
-                  {pipelineSteps.map((step) => (
-                    <span
-                      key={step.name}
-                      className="flex items-center gap-1 text-[11px] text-zinc-600"
-                      title={step.detail}
-                    >
-                      <span className={`inline-block h-1.5 w-1.5 rounded-full ${
-                        step.status === 'ready'
-                          ? 'bg-emerald-500'
-                          : step.status === 'running'
-                            ? 'bg-amber-500 animate-pulse'
-                            : step.status === 'error'
-                              ? 'bg-rose-500'
-                              : 'bg-zinc-300'
-                      }`} />
-                      {step.name}
-                    </span>
-                  ))}
-              </div>
-            </div>
+            <WorkbenchHeader
+              health={health}
+              loading={loading}
+              previewLoading={previewLoading}
+              failedJobs={failedJobs}
+              runningJobs={runningJobs}
+              datasets={datasets}
+              standards={standards}
+              selectedDatasetId={selectedDatasetId}
+              selectedStandardId={selectedStandardId}
+              selectedDatasetMode={selectedDataset?.mode}
+              selectedStandardName={selectedStandard?.name}
+              videoRoot={sourcePreview?.video_root}
+              pipelineSteps={pipelineSteps}
+              onRefreshCore={() => void refreshCore()}
+              onRefreshPreview={() => void refreshPreview(selectedDatasetId)}
+              onDatasetChange={setSelectedDatasetId}
+              onStandardChange={setSelectedStandardId}
+            />
 
           <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -851,158 +745,35 @@ export default function DemoPage() {
                 </Button>
               </div>
             </div>
-            <div className="mb-4 rounded-xl border border-zinc-200 bg-stone-50 p-3">
-              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                <p className="text-xs font-bold uppercase tracking-wider text-zinc-500">素材组（同一动作不同 camera）</p>
-                <span className="rounded-md border border-zinc-200 bg-white px-2 py-1 text-xs text-zinc-600">
-                  {currentGroup ? `当前：${currentGroup.label}` : `共 ${sourceGroups.length} 组`}
-                </span>
-              </div>
-              <div className="max-h-56 space-y-2 overflow-auto rounded-lg border border-zinc-200 bg-white p-2">
-                {sourceGroups.length > 0 ? (
-                  sourceGroups.map((group) => {
-                    const selected = selectedGroupKey === group.key;
-                    const isTraining = followTraining && asyncTrainGroupKey === group.key;
-                    const statusLabel = isTraining
-                      ? '训练中'
-                      : group.completedViews >= group.totalViews
-                        ? '已完成'
-                        : '未生成';
-                    const statusClass = selected
-                      ? 'border border-white/40 bg-white/10 text-white'
-                      : isTraining
-                        ? 'border border-sky-200 bg-sky-50 text-sky-700'
-                        : group.completedViews >= group.totalViews
-                          ? 'border border-emerald-200 bg-emerald-50 text-emerald-700'
-                          : 'border border-zinc-200 bg-white text-zinc-600';
-                    return (
-                      <button
-                        key={group.key}
-                        type="button"
-                        onClick={() => setSelectedGroupKey(group.key)}
-                        className={`w-full rounded-lg border px-3 py-2 text-left transition ${
-                          selected
-                            ? 'border-zinc-900 bg-zinc-900 text-white shadow-sm'
-                            : 'border-zinc-200 bg-stone-50 text-zinc-700 hover:border-zinc-300 hover:bg-white'
-                        }`}
-                      >
-                        <div className="flex items-center gap-2">
-                          <span className="min-w-0 flex-1 truncate text-sm font-semibold">{group.label}</span>
-                          <span className={`rounded-md px-1.5 py-0.5 text-[11px] font-semibold ${statusClass}`}>
-                            {statusLabel}
-                          </span>
-                          {selected ? (
-                            <span className="rounded-md border border-white/40 bg-white/10 px-1.5 py-0.5 text-[11px] font-semibold text-white">
-                              当前预览
-                            </span>
-                          ) : null}
-                        </div>
-                        <div className={`mt-1 text-xs ${selected ? 'text-zinc-200' : 'text-zinc-500'}`}>
-                          视角数 {group.samples.length} · 骨架 {group.generatedViews}/{group.totalViews} · 体积 {formatBytes(group.totalSizeBytes)}
-                        </div>
-                      </button>
-                    );
-                  })
-                ) : (
-                  <div className="px-3 py-8 text-center text-sm text-zinc-500">暂无可用素材</div>
-                )}
-              </div>
-            </div>
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-2 text-xs text-zinc-500">
-                <span className="rounded-md border border-zinc-200 bg-stone-50 px-2 py-1">
-                  视频根目录：{sourcePreview?.video_root || '未检测到'}
-                </span>
-                <span className="rounded-md border border-zinc-200 bg-stone-50 px-2 py-1">
-                  {syncReady ? '播放状态：就绪' : '播放状态：等待素材与骨架'}
-                </span>
-                <span className="rounded-md border border-zinc-200 bg-stone-50 px-2 py-1">
-                  {activeSeqText}
-                </span>
-              </div>
-            </div>
-
-            <div className="mb-4 rounded-xl border border-zinc-200 bg-stone-50 px-4 py-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <Button
-                  size="sm"
-                  onClick={() => void handleSyncPlay()}
-                  disabled={!syncReady || followTraining}
-                  className="h-9 gap-2 px-3"
-                >
-                  <Play className="h-4 w-4" aria-hidden="true" />
-                  <span>播放</span>
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={handleSyncPause}
-                  disabled={!syncReady || followTraining}
-                  className="h-9 gap-2 px-3"
-                >
-                  <Pause className="h-4 w-4" aria-hidden="true" />
-                  <span>暂停</span>
-                </Button>
-                <select
-                  value={syncPlaybackRate}
-                  onChange={handleSyncRateChange}
-                  disabled={!syncReady || followTraining}
-                  className="h-9 rounded-lg border border-zinc-200 bg-white px-2 text-sm"
-                >
-                  <option value={0.5}>0.5x</option>
-                  <option value={0.75}>0.75x</option>
-                  <option value={1}>1.0x</option>
-                  <option value={1.25}>1.25x</option>
-                  <option value={1.5}>1.5x</option>
-                </select>
-                {posePreviewLoading && (
-                  <span className="rounded-md border border-zinc-200 bg-white px-2 py-1 text-xs text-zinc-500">
-                    骨架生成中...
-                  </span>
-                )}
-                {followTraining && (
-                  <span className="rounded-md border border-sky-200 bg-sky-50 px-2 py-1 text-xs text-sky-700">
-                    训练进行中，播放锁定
-                  </span>
-                )}
-                {!posePreviewLoading && posePreviewError && (
-                  <span className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-700">
-                    {posePreviewError}
-                  </span>
-                )}
-                <span className="ml-auto text-xs text-zinc-600">
-                  {formatClock(syncCurrentTime)} / {formatClock(syncDuration)} · 训练进度 {progressTextPercent.toFixed(1)}% ·
-                  {' '}
-                  {followStepLabel}
-                  {syncPlaying ? '（播放中）' : '（暂停）'}
-                </span>
-              </div>
-              <div className="mt-2 flex items-center gap-2 text-xs text-zinc-600">
-                <span className="rounded-md border border-zinc-200 bg-white px-2 py-1">
-                  当前组预览就绪 {groupPrepareDone}/{groupPrepareTotal || currentGroupSamples.length}
-                </span>
-                <div className="h-1.5 flex-1 rounded-full bg-zinc-200">
-                  <div
-                    className="h-1.5 rounded-full bg-zinc-900 transition-all"
-                    style={{
-                      width: `${
-                        (groupPrepareTotal > 0 ? (groupPrepareDone / groupPrepareTotal) * 100 : 0).toFixed(2)
-                      }%`,
-                    }}
-                  />
-                </div>
-              </div>
-              <input
-                type="range"
-                min={0}
-                max={syncDuration > 0 ? syncDuration : 1}
-                step={0.01}
-                value={Math.min(syncCurrentTime, syncDuration > 0 ? syncDuration : syncCurrentTime)}
-                onChange={(event) => syncSeekAll(Number(event.target.value))}
-                disabled={!syncReady || followTraining}
-                className="mt-3 h-2 w-full accent-zinc-900"
-              />
-            </div>
+            <SourceGroupSelector
+              sourceGroups={sourceGroups}
+              selectedGroupKey={selectedGroupKey}
+              currentGroupLabel={currentGroup?.label}
+              followTraining={followTraining}
+              asyncTrainGroupKey={asyncTrainGroupKey}
+              onSelectGroup={setSelectedGroupKey}
+            />
+            <PlaybackControlBar
+              syncReady={syncReady}
+              followTraining={followTraining}
+              syncPlaying={syncPlaying}
+              syncCurrentTime={syncCurrentTime}
+              syncDuration={syncDuration}
+              syncPlaybackRate={syncPlaybackRate}
+              posePreviewLoading={posePreviewLoading}
+              posePreviewError={posePreviewError}
+              progressTextPercent={progressTextPercent}
+              followStepLabel={followStepLabel}
+              groupPrepareDone={groupPrepareDone}
+              groupPrepareTotal={groupPrepareTotal}
+              currentGroupSampleCount={currentGroupSamples.length}
+              videoRoot={sourcePreview?.video_root}
+              activeSeqText={activeSeqText}
+              onPlay={() => void handleSyncPlay()}
+              onPause={handleSyncPause}
+              onRateChange={handleSyncRateChange}
+              onSeek={syncSeekAll}
+            />
 
             <div className="grid gap-4 xl:grid-cols-[minmax(0,5.25fr)_minmax(320px,1.15fr)]">
               <div className="space-y-3">
@@ -1153,98 +924,13 @@ export default function DemoPage() {
             </div>
           </div>
 
-          <section className="grid grid-cols-1 gap-6 2xl:grid-cols-2">
-            <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
-              <div className="mb-4 flex items-center justify-between">
-                <h2 className="flex items-center gap-2 text-base font-bold text-zinc-800">
-                  <FileStack size={18} />
-                  模型产物
-                </h2>
-                <span className="text-xs text-zinc-500">总计 {artifactManifest?.count || 0}</span>
-              </div>
-              <div className="mb-3 flex flex-wrap gap-2">
-                {Object.entries(artifactManifest?.by_kind || {}).map(([kind, count]) => (
-                  <span key={kind} className="rounded-full border border-zinc-200 bg-stone-50 px-2 py-1 text-xs text-zinc-600">
-                    {kind}: {count}
-                  </span>
-                ))}
-              </div>
-              <div className="space-y-2">
-                {modelFiles.length > 0 ? (
-                  modelFiles.map((item) => (
-                    <div key={item.path} className="flex items-center justify-between rounded-lg border border-zinc-200 bg-stone-50 px-3 py-2">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-semibold text-zinc-800">{item.name}</p>
-                        <p className="text-xs text-zinc-500">{formatTime(item.updated_at)}</p>
-                      </div>
-                      <a
-                        href={`${backendBaseUrl}${item.url}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="rounded-md border border-zinc-200 px-2 py-1 text-xs font-semibold text-zinc-700 hover:bg-zinc-100"
-                      >
-                        打开
-                      </a>
-                    </div>
-                  ))
-                ) : (
-                  <div className="flex h-28 items-center justify-center rounded-xl border border-dashed border-zinc-300 bg-stone-50 text-sm text-zinc-500">
-                    暂无模型文件
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
-              <div className="mb-4 flex items-center justify-between">
-                <h2 className="flex items-center gap-2 text-base font-bold text-zinc-800">
-                  <LoaderCircle size={18} />
-                  报告与摘要
-                </h2>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    if (artifactStatus?.summary_exists) {
-                      window.open(`${backendBaseUrl}${artifactStatus.summary_url}`, '_blank', 'noopener,noreferrer');
-                    }
-                  }}
-                  disabled={!artifactStatus?.summary_exists}
-                >
-                  打开摘要
-                </Button>
-              </div>
-              <pre className="mb-3 h-28 overflow-auto rounded-lg border border-zinc-200 bg-zinc-950 p-3 text-xs leading-5 text-zinc-200">
-                {summaryText || '暂无训练摘要'}
-              </pre>
-              <div className="max-h-52 space-y-2 overflow-auto">
-                {reportFiles.length > 0 ? (
-                  reportFiles.map((item) => (
-                    <div key={item.path} className="flex items-center justify-between rounded-lg border border-zinc-200 bg-stone-50 px-3 py-2">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm text-zinc-800">{item.path}</p>
-                        <p className="text-xs text-zinc-500">
-                          {item.kind} · {formatBytes(item.size_bytes)}
-                        </p>
-                      </div>
-                      <a
-                        href={`${backendBaseUrl}${item.url}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="rounded-md border border-zinc-200 px-2 py-1 text-xs font-semibold text-zinc-700 hover:bg-zinc-100"
-                      >
-                        打开
-                      </a>
-                    </div>
-                  ))
-                ) : (
-                  <div className="flex h-20 items-center justify-center rounded-xl border border-dashed border-zinc-300 bg-stone-50 text-sm text-zinc-500">
-                    暂无报告文件
-                  </div>
-                )}
-              </div>
-            </div>
-          </section>
+          <ArtifactSection
+            artifactManifest={artifactManifest}
+            artifactStatus={artifactStatus}
+            modelFiles={modelFiles}
+            reportFiles={reportFiles}
+            summaryText={summaryText}
+          />
         </div>
       </section>
     </div>
