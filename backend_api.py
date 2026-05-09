@@ -648,10 +648,12 @@ def _try_infer_3d_from_model(
         state = torch.load(str(ckpt_path), map_location=device, weights_only=False)
         state_dict = state.get("state_dict", state)
         cleaned = {k.replace("model.", "", 1) if k.startswith("model.") else k: v for k, v in state_dict.items()}
-        # 从 input_proj.weight 推断 hidden_dim（shape=[hidden_dim, input_dim]）
+        # 从 checkpoint 推断模型参数
         proj_key = next((k for k in cleaned if "input_proj.weight" in k), None)
         hidden_dim = int(cleaned[proj_key].shape[0]) if proj_key else 256
-        model = PoseLiftTransformer(hidden_dim=hidden_dim)
+        pos_key = next((k for k in cleaned if "time_pos_embed" in k), None)
+        max_seq_len = int(cleaned[pos_key].shape[1]) if pos_key else 81
+        model = PoseLiftTransformer(hidden_dim=hidden_dim, max_seq_len=max_seq_len)
         model.load_state_dict(cleaned, strict=False)
         model.eval()
         model.to(device)
